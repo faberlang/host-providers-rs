@@ -3,6 +3,11 @@
   "provider": "tempus",
   "owner": "faberlang",
   "prefixes": ["tempus"],
-  "calls": [],
+  "calls": [
+    {"route": "tempus:nunc", "summary": "Return wall-clock Unix epoch nanoseconds.", "opener": "vacuum", "result": "numerus"},
+    {"route": "tempus:monotonicum", "summary": "Return monotonic nanoseconds.", "opener": "vacuum", "result": "numerus"},
+    {"route": "tempus:activum", "summary": "Return active nanoseconds.", "opener": "vacuum", "result": "numerus"},
+    {"route": "tempus:dormiet", "summary": "Block for a bounded millisecond interval.", "opener": "numerus", "result": "vacuum"}
+  ],
   "native_dependencies": []
 }
