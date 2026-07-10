@@ -1,5 +1,204 @@
-//! Public `aleator` provider; random-source migration is the P3 slice.
+//! Public `aleator` provider.
+
+use faber::Valor;
+use host_kernel::{
+    DispatchContext, HostError, HostResult, Kernel, Provider, ProviderRegistration, ProviderReply,
+    RequestFrame,
+};
+use std::fs::File;
+use std::io::Read;
+use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub struct Aleator {
+    registration: ProviderRegistration,
+}
+
+impl Aleator {
+    pub fn new() -> HostResult<Self> {
+        Ok(Self {
+            registration: ProviderRegistration::new(host_kernel::parse_manifest(manifest_json())?),
+        })
+    }
+}
+
+pub fn register(kernel: &mut Kernel) -> HostResult<()> {
+    kernel.register(Arc::new(Aleator::new()?))
+}
 
 pub fn manifest_json() -> &'static str {
     include_str!("manifest.json")
+}
+
+impl Provider for Aleator {
+    fn registration(&self) -> &ProviderRegistration {
+        &self.registration
+    }
+
+    fn dispatch(
+        &self,
+        request: &RequestFrame,
+        _context: &DispatchContext,
+    ) -> HostResult<ProviderReply> {
+        match request.route.as_str() {
+            "aleator:fractum" => Ok(ProviderReply::item(Valor::Fractus(random_fraction()))),
+            "aleator:sortire" => sort_integer(&request.opener),
+            "aleator:octetos" => random_bytes_route(&request.opener),
+            "aleator:uuid" => uuid_route(),
+            "aleator:semina" => seed(&request.opener),
+            other => Err(HostError::no_route(format!(
+                "no built-in aleator syscall registered for {other}"
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Prng {
+    state: u64,
+}
+
+impl Prng {
+    fn next_u64(&mut self) -> u64 {
+        if self.state == 0 {
+            self.state = default_seed();
+        }
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        x
+    }
+}
+
+static RNG: Mutex<Prng> = Mutex::new(Prng { state: 0 });
+
+fn rng() -> MutexGuard<'static, Prng> {
+    RNG.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn random_fraction() -> f64 {
+    let bits = rng().next_u64() >> 11;
+    (bits as f64) / ((1_u64 << 53) as f64)
+}
+
+fn sort_integer(opener: &Valor) -> HostResult<ProviderReply> {
+    let min = i64_arg(opener, 0, "min")?;
+    let max = i64_arg(opener, 1, "max")?;
+    let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+    let span = (hi as i128 - lo as i128 + 1) as u128;
+    let offset = (u128::from(rng().next_u64()) % span) as i128;
+    Ok(ProviderReply::item(Valor::Numerus(
+        (lo as i128 + offset) as i64,
+    )))
+}
+
+fn random_bytes_route(opener: &Valor) -> HostResult<ProviderReply> {
+    let n = i64_arg(opener, 0, "n")?;
+    let len = usize::try_from(n.max(0))
+        .map_err(|_| HostError::invalid_args("n is too large for aleator:octetos"))?;
+    let mut bytes = vec![0_u8; len];
+    if len > 0 {
+        File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut bytes))
+            .map_err(|error| {
+                HostError::internal(format!("aleator random bytes failed: {error}"))
+            })?;
+    }
+    Ok(ProviderReply::byte(bytes))
+}
+
+fn uuid_route() -> HostResult<ProviderReply> {
+    let mut bytes = vec![0_u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .map_err(|error| HostError::internal(format!("aleator random bytes failed: {error}")))?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(ProviderReply::item(Valor::Textus(format_uuid(&bytes))))
+}
+
+fn seed(opener: &Valor) -> HostResult<ProviderReply> {
+    let n = i64_arg(opener, 0, "n")?;
+    rng().state = if n > 0 { n as u64 } else { default_seed() };
+    Ok(ProviderReply::vacuum())
+}
+
+fn default_seed() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos() as u64);
+    nanos ^ u64::from(std::process::id())
+}
+
+fn format_uuid(bytes: &[u8]) -> String {
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+}
+
+fn i64_arg(value: &Valor, index: usize, name: &str) -> HostResult<i64> {
+    let value = match value {
+        Valor::Lista(values) => values.get(index),
+        value if index == 0 => Some(value),
+        _ => None,
+    };
+    match value {
+        Some(Valor::Numerus(number)) => Ok(*number),
+        Some(_) => Err(HostError::invalid_args(format!("{name} must be numerus"))),
+        None => Err(HostError::invalid_args(format!("missing {name}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use host_kernel::{Kernel, ProviderContent};
+
+    #[test]
+    fn manifest_registers_all_canonical_routes() {
+        let mut kernel = Kernel::new();
+        register(&mut kernel).expect("register aleator");
+        let routes = &kernel.manifest().providers[0].calls;
+        assert_eq!(routes.len(), 5);
+        assert!(routes.iter().any(|call| call.route == "aleator:octetos"));
+    }
+
+    #[test]
+    fn seeded_integer_and_bytes_match_reply_shapes() {
+        let provider = Aleator::new().expect("provider");
+        let context = DispatchContext {
+            cancellation: host_kernel::CancellationProbe::new(|| false),
+        };
+        let seed = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "seed".into(),
+                    route: "aleator:semina".into(),
+                    opener: Valor::Numerus(42),
+                    target: None,
+                },
+                &context,
+            )
+            .expect("seed");
+        assert!(seed.contents.is_empty());
+        let bytes = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "bytes".into(),
+                    route: "aleator:octetos".into(),
+                    opener: Valor::Numerus(4),
+                    target: None,
+                },
+                &context,
+            )
+            .expect("bytes");
+        assert!(
+            matches!(bytes.contents.as_slice(), [ProviderContent::Byte(value)] if value.len() == 4)
+        );
+    }
 }
