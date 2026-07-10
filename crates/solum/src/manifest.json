@@ -1,0 +1,8 @@
+{
+  "manifest_version": 1,
+  "provider": "solum",
+  "owner": "faberlang",
+  "prefixes": ["solum"],
+  "calls": [],
+  "native_dependencies": []
+}

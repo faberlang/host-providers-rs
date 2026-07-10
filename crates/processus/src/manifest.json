@@ -1,0 +1,8 @@
+{
+  "manifest_version": 1,
+  "provider": "processus",
+  "owner": "faberlang",
+  "prefixes": ["processus"],
+  "calls": [],
+  "native_dependencies": []
+}

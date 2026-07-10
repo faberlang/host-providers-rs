@@ -1,0 +1,8 @@
+{
+  "manifest_version": 1,
+  "provider": "tempus",
+  "owner": "faberlang",
+  "prefixes": ["tempus"],
+  "calls": [],
+  "native_dependencies": []
+}

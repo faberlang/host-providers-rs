@@ -1,0 +1,8 @@
+{
+  "manifest_version": 1,
+  "provider": "aleator",
+  "owner": "faberlang",
+  "prefixes": ["aleator"],
+  "calls": [],
+  "native_dependencies": []
+}

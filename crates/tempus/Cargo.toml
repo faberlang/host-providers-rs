@@ -1,0 +1,9 @@
+[package]
+name = "tempus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+faber.workspace = true
+host-kernel.workspace = true

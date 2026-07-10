@@ -1,0 +1,8 @@
+{
+  "manifest_version": 1,
+  "provider": "consolum",
+  "owner": "faberlang",
+  "prefixes": ["consolum"],
+  "calls": [],
+  "native_dependencies": []
+}
