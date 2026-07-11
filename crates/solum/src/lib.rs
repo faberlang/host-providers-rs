@@ -43,7 +43,7 @@ impl Provider for Solum {
         _context: &DispatchContext,
     ) -> HostResult<ProviderReply> {
         match request.route.as_str() {
-            "solum:lege" => read_text(&request.opener),
+            "solum:lege" => read_text(&request.opener, request.target.as_deref()),
             "solum:hauri" | "solum:hauriet" => read_bytes(&request.opener),
             "solum:partem" => read_byte_range(&request.opener),
             "solum:inveni" => find_text_range(&request.opener),
@@ -84,11 +84,38 @@ impl Provider for Solum {
     }
 }
 
-fn read_text(opener: &Valor) -> HostResult<ProviderReply> {
+/// Read file for `solum:lege`, honoring materialization target (parity with faber-runtime).
+///
+/// Contract (matches radix codegen materializers):
+/// - `textus` / default → one Item `Textus` (full file) via `try_sermo_materialize_textus` / scalar
+/// - `lista<textus>` (`Vec<String>`) → one Item per line + Done (`try_sermo_materialize_lista`), same as carpe
+/// - `octeti` (`Vec<u8>`) → byte reply (`try_sermo_materialize_octeti`)
+fn read_text(opener: &Valor, target: Option<&str>) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
-    let text = fs::read_to_string(&path)
-        .map_err(|error| HostError::internal(format!("solum:lege failed: {error}")))?;
-    Ok(ProviderReply::item(Valor::Textus(text)))
+    let textus = std::any::type_name::<String>();
+    let lista_textus = std::any::type_name::<Vec<String>>();
+    let octeti = std::any::type_name::<Vec<u8>>();
+    if target.is_none() || target == Some(textus) {
+        let text = fs::read_to_string(&path)
+            .map_err(|error| HostError::internal(format!("solum:lege failed: {error}")))?;
+        return Ok(ProviderReply::item(Valor::Textus(text)));
+    }
+    if target == Some(lista_textus) {
+        let text = fs::read_to_string(&path)
+            .map_err(|error| HostError::internal(format!("solum:lege failed: {error}")))?;
+        return Ok(ProviderReply::list(
+            text.lines().map(|line| Valor::Textus(line.to_owned())),
+        ));
+    }
+    if target == Some(octeti) {
+        let bytes = fs::read(&path)
+            .map_err(|error| HostError::internal(format!("solum:lege failed: {error}")))?;
+        return Ok(ProviderReply::byte(bytes));
+    }
+    Err(HostError::internal(format!(
+        "solum:lege target `{}` is not supported",
+        target.unwrap_or("<unknown>")
+    )))
 }
 
 fn read_bytes(opener: &Valor) -> HostResult<ProviderReply> {
@@ -261,9 +288,12 @@ fn create_symlink(opener: &Valor) -> HostResult<ProviderReply> {
 
 fn delete_file(opener: &Valor) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
-    fs::remove_file(&path)
-        .map_err(|error| HostError::internal(format!("solum:dele failed: {error}")))?;
-    Ok(ProviderReply::vacuum())
+    // Parity with faber-runtime: missing path is success (idempotent dele).
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(ProviderReply::vacuum()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ProviderReply::vacuum()),
+        Err(error) => Err(HostError::internal(format!("solum:dele failed: {error}"))),
+    }
 }
 
 fn copy_file(opener: &Valor) -> HostResult<ProviderReply> {
@@ -609,5 +639,101 @@ mod tests {
             [ProviderContent::Item(Valor::Numerus(6))]
         ));
         std::fs::remove_file(path).expect("cleanup");
+    }
+
+    #[test]
+    fn lege_honors_lista_textus_target_as_multi_item_lines() {
+        let provider = Solum::new().expect("provider");
+        let path =
+            std::env::temp_dir().join(format!("faber-public-solum-lege-{}", std::process::id()));
+        std::fs::write(&path, "prima\nsecunda\n").expect("fixture");
+        let path_s = path.to_string_lossy().into_owned();
+        let lista_target = std::any::type_name::<Vec<String>>().to_owned();
+
+        // Codegen path: try_sermo_materialize_lista — one Item per line (carpe shape).
+        let lines = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "lege-lista".into(),
+                    route: "solum:lege".into(),
+                    opener: Valor::Textus(path_s.clone()),
+                    target: Some(lista_target),
+                },
+                &context(),
+            )
+            .expect("lege lista");
+        assert_eq!(
+            lines.contents.as_slice(),
+            &[
+                ProviderContent::Item(Valor::Textus("prima".into())),
+                ProviderContent::Item(Valor::Textus("secunda".into())),
+            ]
+        );
+
+        let text = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "lege-text".into(),
+                    route: "solum:lege".into(),
+                    opener: Valor::Textus(path_s),
+                    target: Some(std::any::type_name::<String>().to_owned()),
+                },
+                &context(),
+            )
+            .expect("lege text");
+        assert!(matches!(
+            text.contents.as_slice(),
+            [ProviderContent::Item(Valor::Textus(s))] if s == "prima\nsecunda\n"
+        ));
+        std::fs::remove_file(&path).expect("cleanup");
+    }
+
+    #[test]
+    fn inveni_empty_pattern_is_found_at_start() {
+        let provider = Solum::new().expect("provider");
+        let path =
+            std::env::temp_dir().join(format!("faber-public-solum-empty-{}", std::process::id()));
+        std::fs::write(&path, b"payload").expect("fixture");
+        let found = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "empty".into(),
+                    route: "solum:inveni".into(),
+                    opener: Valor::Lista(vec![
+                        Valor::Textus(path.to_string_lossy().into_owned()),
+                        Valor::Textus(String::new()),
+                        Valor::Numerus(3),
+                        Valor::Numerus(8),
+                    ]),
+                    target: None,
+                },
+                &context(),
+            )
+            .expect("empty inveni");
+        assert!(matches!(
+            found.contents.as_slice(),
+            [ProviderContent::Item(Valor::Numerus(3))]
+        ));
+        std::fs::remove_file(&path).expect("cleanup");
+    }
+
+    #[test]
+    fn dele_missing_path_is_success() {
+        let provider = Solum::new().expect("provider");
+        let missing =
+            std::env::temp_dir().join(format!("faber-public-solum-missing-{}", std::process::id()));
+        assert!(!missing.exists());
+        let reply = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "dele-missing".into(),
+                    route: "solum:dele".into(),
+                    opener: Valor::Textus(missing.to_string_lossy().into_owned()),
+                    target: None,
+                },
+                &context(),
+            )
+            .expect("dele missing");
+        assert!(reply.contents.is_empty());
     }
 }
