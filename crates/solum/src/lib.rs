@@ -84,12 +84,21 @@ impl Provider for Solum {
     }
 }
 
+/// One Item per line — shape for `try_sermo_materialize_lista` (`lege` lista + `carpe`).
+fn read_file_lines(path: &str, err_label: &str) -> HostResult<ProviderReply> {
+    let text = fs::read_to_string(path)
+        .map_err(|error| HostError::internal(format!("{err_label}: {error}")))?;
+    Ok(ProviderReply::list(
+        text.lines().map(|line| Valor::Textus(line.to_owned())),
+    ))
+}
+
 /// Read file for `solum:lege`, honoring materialization target (parity with faber-runtime).
 ///
 /// Contract (matches radix codegen materializers):
-/// - `textus` / default → one Item `Textus` (full file) via `try_sermo_materialize_textus` / scalar
-/// - `lista<textus>` (`Vec<String>`) → one Item per line + Done (`try_sermo_materialize_lista`), same as carpe
-/// - `octeti` (`Vec<u8>`) → byte reply (`try_sermo_materialize_octeti`)
+/// - `textus` / default → one Item `Textus` (full file)
+/// - `lista<textus>` → multi-Item lines (`try_sermo_materialize_lista`), same as carpe
+/// - `octeti` → byte reply (`try_sermo_materialize_octeti`)
 fn read_text(opener: &Valor, target: Option<&str>) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
     let textus = std::any::type_name::<String>();
@@ -101,11 +110,7 @@ fn read_text(opener: &Valor, target: Option<&str>) -> HostResult<ProviderReply> 
         return Ok(ProviderReply::item(Valor::Textus(text)));
     }
     if target == Some(lista_textus) {
-        let text = fs::read_to_string(&path)
-            .map_err(|error| HostError::internal(format!("solum:lege failed: {error}")))?;
-        return Ok(ProviderReply::list(
-            text.lines().map(|line| Valor::Textus(line.to_owned())),
-        ));
+        return read_file_lines(&path, "solum:lege failed");
     }
     if target == Some(octeti) {
         let bytes = fs::read(&path)
@@ -172,11 +177,7 @@ fn find_text_range(opener: &Valor) -> HostResult<ProviderReply> {
 
 fn read_lines(opener: &Valor) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
-    let text = fs::read_to_string(&path)
-        .map_err(|error| HostError::internal(format!("solum:carpe failed: {error}")))?;
-    Ok(ProviderReply::list(
-        text.lines().map(|line| Valor::Textus(line.to_owned())),
-    ))
+    read_file_lines(&path, "solum:carpe failed")
 }
 
 fn write_text(opener: &Valor) -> HostResult<ProviderReply> {
