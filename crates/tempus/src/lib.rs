@@ -1,6 +1,6 @@
 //! Public `tempus` provider.
 
-use faber::Valor;
+use faber::{Instans, InstansPraecisio, Valor};
 use host_kernel::{
     DispatchContext, HostError, HostResult, Kernel, Provider, ProviderRegistration, ProviderReply,
     RequestFrame,
@@ -39,7 +39,10 @@ impl Provider for Tempus {
         context: &DispatchContext,
     ) -> HostResult<ProviderReply> {
         match request.route.as_str() {
-            "tempus:nunc" => Ok(ProviderReply::item(epoch_nanos()?.into())),
+            "tempus:nunc" => {
+                let instant = Instans::from_nanos(epoch_nanos()?, InstansPraecisio::Nanosecunda);
+                Ok(ProviderReply::item(instant.into()))
+            }
             "tempus:monotonicum" | "tempus:activum" => {
                 Ok(ProviderReply::item(elapsed_nanos()?.into()))
             }
@@ -58,6 +61,9 @@ fn sleep(opener: &Valor, context: &DispatchContext) -> HostResult<ProviderReply>
         return Err(HostError::cancelled());
     }
     let ms = i64_arg(opener, 0, "ms")?;
+    if ms < 0 {
+        return Err(HostError::invalid_args("ms must be non-negative"));
+    }
     if ms > 0 {
         let deadline = Instant::now() + Duration::from_millis(ms as u64);
         while Instant::now() < deadline {
@@ -143,7 +149,31 @@ mod tests {
         let context = DispatchContext {
             cancellation: host_kernel::CancellationProbe::new(|| false),
         };
-        for route in ["tempus:nunc", "tempus:monotonicum", "tempus:activum"] {
+        let now = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "tempus:nunc".into(),
+                    route: "tempus:nunc".into(),
+                    opener: Valor::Nihil,
+                    target: None,
+                },
+                &context,
+            )
+            .expect("wall clock route");
+        assert!(matches!(
+            now.contents.as_slice(),
+            [ProviderContent::Item(Valor::Instans(_))]
+        ));
+        assert!(faber::Instans::try_from_valor(
+            match &now.contents[0] {
+                ProviderContent::Item(value) => value,
+                _ => unreachable!("wall clock must return an item"),
+            },
+            InstansPraecisio::Nanosecunda,
+        )
+        .is_some());
+
+        for route in ["tempus:monotonicum", "tempus:activum"] {
             let reply = provider
                 .dispatch(
                     &RequestFrame {
@@ -159,6 +189,28 @@ mod tests {
                 reply.contents.as_slice(),
                 [ProviderContent::Item(Valor::Numerus(_))]
             ));
+        }
+    }
+
+    #[test]
+    fn sleep_rejects_invalid_duration() {
+        let provider = Tempus::new().expect("provider");
+        let context = DispatchContext {
+            cancellation: host_kernel::CancellationProbe::new(|| false),
+        };
+        for opener in [Valor::Textus("slow".into()), Valor::Numerus(-1)] {
+            let error = provider
+                .dispatch(
+                    &RequestFrame {
+                        conversation_id: "invalid-sleep".into(),
+                        route: "tempus:dormiet".into(),
+                        opener,
+                        target: None,
+                    },
+                    &context,
+                )
+                .expect_err("invalid sleep duration");
+            assert_eq!(error.code, "E_INVALID_ARGS");
         }
     }
 }
