@@ -315,21 +315,23 @@ fn rename_file(opener: &Valor) -> HostResult<ProviderReply> {
 
 fn touch(opener: &Valor) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
-    let path_ref = Path::new(&path);
-    if !path_ref.exists() {
+    touch_path(Path::new(&path))
+        .map_err(|error| HostError::internal(format!("solum:tange failed for {path}: {error}")))?;
+    Ok(ProviderReply::vacuum())
+}
+
+fn touch_path(path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
         OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
-            .open(path_ref)
-            .map_err(|error| HostError::internal(format!("solum:tange create failed: {error}")))?;
+            .open(path)?;
     }
+    let handle = File::open(path)?;
     let now = SystemTime::now();
-    if let Ok(handle) = File::open(path_ref) {
-        let times = FileTimes::new().set_modified(now).set_accessed(now);
-        drop(handle.set_times(times));
-    }
-    Ok(ProviderReply::vacuum())
+    let times = FileTimes::new().set_modified(now).set_accessed(now);
+    handle.set_times(times)
 }
 
 fn follow_symlink(opener: &Valor) -> HostResult<ProviderReply> {
@@ -379,12 +381,17 @@ fn remove_dir(opener: &Valor) -> HostResult<ProviderReply> {
 }
 
 fn home_dir() -> HostResult<ProviderReply> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| {
-            HostError::internal("solum:domus failed: no home directory environment variable")
-        })?;
+    let home = home_value(
+        std::env::var("HOME").ok(),
+        std::env::var("USERPROFILE").ok(),
+    )
+    .map_err(|message| HostError::internal(format!("solum:domus failed: {message}")))?;
     Ok(ProviderReply::item(Valor::Textus(home)))
+}
+
+fn home_value(home: Option<String>, userprofile: Option<String>) -> Result<String, &'static str> {
+    home.or(userprofile)
+        .ok_or("no home directory environment variable")
 }
 
 fn join_paths(opener: &Valor) -> HostResult<ProviderReply> {
@@ -736,5 +743,49 @@ mod tests {
             )
             .expect("dele missing");
         assert!(reply.contents.is_empty());
+    }
+
+    #[test]
+    fn tange_existing_socket_returns_internal_error_instead_of_success() {
+        use std::os::unix::net::UnixListener;
+
+        let provider = Solum::new().expect("provider");
+        let path =
+            std::env::temp_dir().join(format!("faber-public-solum-socket-{}", std::process::id()));
+        let listener = UnixListener::bind(&path).expect("bind socket fixture");
+        let path_s = path.to_string_lossy().into_owned();
+        let error = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "tange-socket".into(),
+                    route: "solum:tange".into(),
+                    opener: Valor::Textus(path_s.clone()),
+                    target: None,
+                },
+                &context(),
+            )
+            .expect_err("touching an unopenable existing path must fail");
+        assert_eq!(error.code, "E_INTERNAL");
+        assert!(error.message.contains("solum:tange"));
+        assert!(error.message.contains(&path_s));
+
+        drop(listener);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn home_value_prefers_home_then_userprofile_and_errors_without_either() {
+        assert_eq!(
+            home_value(Some("/home/faber".into()), Some("C:\\Users\\faber".into())),
+            Ok("/home/faber".into())
+        );
+        assert_eq!(
+            home_value(None, Some("C:\\Users\\faber".into())),
+            Ok("C:\\Users\\faber".into())
+        );
+        assert_eq!(
+            home_value(None, None),
+            Err("no home directory environment variable")
+        );
     }
 }
