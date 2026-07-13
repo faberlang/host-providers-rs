@@ -255,22 +255,18 @@ fn configure_process_group(command: &mut Command) {
 fn terminate_process_group(child: &mut Child) -> HostResult<bool> {
     #[cfg(unix)]
     {
-        if child
-            .try_wait()
-            .map_err(|error| HostError::internal(format!("failed to inspect child: {error}")))?
-            .is_some()
-        {
+        let group = -(child.id() as libc::pid_t);
+        let signal_result = unsafe { libc::kill(group, libc::SIGKILL) };
+        if signal_result == 0 {
             return Ok(true);
         }
-        let group = format!("-{}", child.id());
-        let status = Command::new("/bin/kill")
-            .arg("-KILL")
-            .arg(group)
-            .status()
-            .map_err(|error| {
-                HostError::internal(format!("failed to signal child group: {error}"))
-            })?;
-        Ok(status.success())
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(false);
+        }
+        Err(HostError::internal(format!(
+            "failed to signal child group: {error}"
+        )))
     }
     #[cfg(not(unix))]
     {
