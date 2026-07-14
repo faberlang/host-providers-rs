@@ -8,7 +8,7 @@ use host_kernel::{
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
@@ -46,6 +46,7 @@ impl Provider for Processus {
             "processus:exsequi" | "processus:exsequetur" => execute_shell(&request.opener, context),
             "processus:dimitte" => spawn_detached(&request.opener),
             "processus:lege" => read_env(&request.opener),
+            "processus:scribe" => write_env(&request.opener),
             "processus:sedes" => current_dir(),
             "processus:muta" => set_current_dir(&request.opener),
             "processus:identitas" => Ok(ProviderReply::item(Valor::Numerus(
@@ -296,14 +297,40 @@ fn spawn_detached(opener: &Valor) -> HostResult<ProviderReply> {
     Ok(ProviderReply::item(Valor::Numerus(child.id() as i64)))
 }
 
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn environment_lock() -> HostResult<MutexGuard<'static, ()>> {
+    ENV_LOCK
+        .lock()
+        .map_err(|_error| HostError::internal("processus environment lock poisoned"))
+}
+
 fn read_env(opener: &Valor) -> HostResult<ProviderReply> {
     let name = string_arg(opener, 0, "nomen")?;
+    let _guard = environment_lock()?;
     match std::env::var(&name) {
         Ok(value) => Ok(ProviderReply::item(Valor::Textus(value))),
         Err(_) => Err(HostError::internal(format!(
             "processus:lege: environment variable `{name}` is not set"
         ))),
     }
+}
+
+fn write_env(opener: &Valor) -> HostResult<ProviderReply> {
+    let values = string_list_arg(opener, 0, "args")?;
+    let [name, value] = values.as_slice() else {
+        return Err(HostError::invalid_args(
+            "processus:scribe requires [nomen, valor]",
+        ));
+    };
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
+        return Err(HostError::invalid_args(
+            "processus:scribe nomen must be non-empty and contain neither `=` nor NUL",
+        ));
+    }
+    let _guard = environment_lock()?;
+    std::env::set_var(name, value);
+    Ok(ProviderReply::vacuum())
 }
 
 fn current_dir() -> HostResult<ProviderReply> {
@@ -378,46 +405,72 @@ mod tests {
         let mut kernel = Kernel::new();
         register(&mut kernel).expect("register processus");
         let calls = &kernel.manifest().providers[0].calls;
-        assert_eq!(calls.len(), 9);
+        assert_eq!(calls.len(), 10);
+        assert!(calls.iter().any(|call| call.route == "processus:scribe"));
         assert!(
             calls.iter().all(|call| call.route != "processus:exi"),
             "processus:exi must stay unmanifested until host exit has a protocol-visible terminal response"
-        );
-        assert!(
-            calls.iter().all(|call| call.route != "processus:scribe"),
-            "processus:scribe must stay unmanifested until process-wide environment mutation has a serialization policy"
         );
     }
 
     #[test]
     fn unsafe_unmanifested_routes_are_not_dispatchable_through_provider() {
         let provider = Processus::new().expect("provider");
-        for (route, opener) in [
-            ("processus:exi", Valor::Numerus(7)),
-            (
-                "processus:scribe",
-                Valor::Lista(vec![
-                    Valor::Textus("FABER_PROVIDER_UNSAFE_ENV".to_owned()),
-                    Valor::Textus("value".to_owned()),
-                ]),
-            ),
-        ] {
-            let error = provider
-                .dispatch(
-                    &RequestFrame {
-                        conversation_id: route.into(),
-                        route: route.into(),
-                        opener,
-                        target: None,
-                    },
-                    &DispatchContext {
-                        cancellation: host_kernel::CancellationProbe::new(|| true),
-                    },
-                )
-                .expect_err("unsafe route must be rejected as an ordinary host error");
+        let route = "processus:exi";
+        let error = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: route.into(),
+                    route: route.into(),
+                    opener: Valor::Numerus(7),
+                    target: None,
+                },
+                &DispatchContext {
+                    cancellation: host_kernel::CancellationProbe::new(|| true),
+                },
+            )
+            .expect_err("unsafe route must be rejected as an ordinary host error");
 
-            assert_eq!(error.code, "E_NO_ROUTE");
-        }
+        assert_eq!(error.code, "E_NO_ROUTE");
+    }
+
+    #[test]
+    fn environment_mutation_round_trip_uses_textus_carriers() {
+        let provider = Processus::new().expect("provider");
+        let name = format!("FABER_PROCESSUS_TEST_{}", std::process::id());
+        let context = DispatchContext {
+            cancellation: host_kernel::CancellationProbe::new(|| false),
+        };
+        provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "scribe".into(),
+                    route: "processus:scribe".into(),
+                    opener: Valor::Lista(vec![
+                        Valor::Textus(name.clone()),
+                        Valor::Textus("salve".into()),
+                    ]),
+                    target: None,
+                },
+                &context,
+            )
+            .expect("environment write");
+        let reply = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "lege".into(),
+                    route: "processus:lege".into(),
+                    opener: Valor::Textus(name.clone()),
+                    target: None,
+                },
+                &context,
+            )
+            .expect("environment read");
+        assert!(matches!(
+            reply.contents.as_slice(),
+            [ProviderContent::Item(Valor::Textus(value))] if value == "salve"
+        ));
+        std::env::remove_var(name);
     }
 
     #[test]

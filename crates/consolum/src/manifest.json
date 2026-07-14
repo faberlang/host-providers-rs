@@ -4,8 +4,8 @@
   "owner": "faberlang",
   "prefixes": ["consolum"],
   "calls": [
-    {"route": "consolum:hauri", "summary": "Read bytes from stdin.", "opener": "numerus", "result": "octeti"},
-    {"route": "consolum:hauriet", "summary": "Read bytes from stdin asynchronously.", "opener": "numerus", "result": "octeti"},
+    {"route": "consolum:hauri", "summary": "Read bytes from stdin.", "opener": "sponte<numerus>", "result": "octeti"},
+    {"route": "consolum:hauriet", "summary": "Read bytes from stdin asynchronously.", "opener": "sponte<numerus>", "result": "octeti"},
     {"route": "consolum:lege", "summary": "Read one text line from stdin.", "opener": "vacuum", "result": "textus"},
     {"route": "consolum:leget", "summary": "Read one text line from stdin asynchronously.", "opener": "vacuum", "result": "textus"},
     {"route": "consolum:funde", "summary": "Write bytes to stdout.", "opener": "octeti", "result": "vacuum"},
