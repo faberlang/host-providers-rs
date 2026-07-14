@@ -46,7 +46,6 @@ impl Provider for Processus {
             "processus:exsequi" | "processus:exsequetur" => execute_shell(&request.opener, context),
             "processus:dimitte" => spawn_detached(&request.opener),
             "processus:lege" => read_env(&request.opener),
-            "processus:scribe" => write_env(&request.opener),
             "processus:sedes" => current_dir(),
             "processus:muta" => set_current_dir(&request.opener),
             "processus:identitas" => Ok(ProviderReply::item(Valor::Numerus(
@@ -307,16 +306,6 @@ fn read_env(opener: &Valor) -> HostResult<ProviderReply> {
     }
 }
 
-fn write_env(opener: &Valor) -> HostResult<ProviderReply> {
-    let name = string_arg(opener, 0, "nomen")?;
-    let value = string_arg(opener, 1, "valor")?;
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var(name, value);
-    }
-    Ok(ProviderReply::vacuum())
-}
-
 fn current_dir() -> HostResult<ProviderReply> {
     let path = std::env::current_dir()
         .map_err(|error| HostError::internal(format!("processus:sedes failed: {error}")))?;
@@ -389,31 +378,46 @@ mod tests {
         let mut kernel = Kernel::new();
         register(&mut kernel).expect("register processus");
         let calls = &kernel.manifest().providers[0].calls;
-        assert_eq!(calls.len(), 10);
+        assert_eq!(calls.len(), 9);
         assert!(
             calls.iter().all(|call| call.route != "processus:exi"),
             "processus:exi must stay unmanifested until host exit has a protocol-visible terminal response"
         );
+        assert!(
+            calls.iter().all(|call| call.route != "processus:scribe"),
+            "processus:scribe must stay unmanifested until process-wide environment mutation has a serialization policy"
+        );
     }
 
     #[test]
-    fn exit_route_is_not_dispatchable_through_provider() {
+    fn unsafe_unmanifested_routes_are_not_dispatchable_through_provider() {
         let provider = Processus::new().expect("provider");
-        let error = provider
-            .dispatch(
-                &RequestFrame {
-                    conversation_id: "exit".into(),
-                    route: "processus:exi".into(),
-                    opener: Valor::Numerus(7),
-                    target: None,
-                },
-                &DispatchContext {
-                    cancellation: host_kernel::CancellationProbe::new(|| true),
-                },
-            )
-            .expect_err("exit route must be rejected as an ordinary host error");
+        for (route, opener) in [
+            ("processus:exi", Valor::Numerus(7)),
+            (
+                "processus:scribe",
+                Valor::Lista(vec![
+                    Valor::Textus("FABER_PROVIDER_UNSAFE_ENV".to_owned()),
+                    Valor::Textus("value".to_owned()),
+                ]),
+            ),
+        ] {
+            let error = provider
+                .dispatch(
+                    &RequestFrame {
+                        conversation_id: route.into(),
+                        route: route.into(),
+                        opener,
+                        target: None,
+                    },
+                    &DispatchContext {
+                        cancellation: host_kernel::CancellationProbe::new(|| true),
+                    },
+                )
+                .expect_err("unsafe route must be rejected as an ordinary host error");
 
-        assert_eq!(error.code, "E_NO_ROUTE");
+            assert_eq!(error.code, "E_NO_ROUTE");
+        }
     }
 
     #[test]
