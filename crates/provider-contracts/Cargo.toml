@@ -8,6 +8,7 @@ publish = false
 [dev-dependencies]
 aleator = { path = "../aleator" }
 consolum = { path = "../consolum" }
+faber.workspace = true
 host-kernel.workspace = true
 processus = { path = "../processus" }
 solum = { path = "../solum" }

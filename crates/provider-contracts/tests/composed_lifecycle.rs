@@ -1,13 +1,88 @@
+use faber::Valor;
 use host_kernel::{parse_manifest, Kernel};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct ProviderCase {
     name: &'static str,
     prefix: &'static str,
     manifest_json: &'static str,
     register: fn(&mut Kernel) -> host_kernel::HostResult<()>,
+    provider: fn() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>>,
     public_routes: &'static [&'static str],
     excluded_routes: &'static [&'static str],
+}
+
+struct DispatchFixture {
+    opener: Valor,
+    target: Option<String>,
+    cancelled: bool,
+}
+
+impl DispatchFixture {
+    fn new(opener: Valor) -> Self {
+        Self {
+            opener,
+            target: None,
+            cancelled: false,
+        }
+    }
+
+    fn cancelled(opener: Valor) -> Self {
+        Self {
+            opener,
+            target: None,
+            cancelled: true,
+        }
+    }
+}
+
+struct TestWorkspace {
+    root: PathBuf,
+    next_id: usize,
+}
+
+impl TestWorkspace {
+    fn new(provider: &str) -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "faber-host-provider-contracts-{provider}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create test workspace");
+        Self { root, next_id: 0 }
+    }
+
+    fn file(&mut self, name: &str, contents: impl AsRef<[u8]>) -> String {
+        let path = self.unique_path(name);
+        std::fs::write(&path, contents).expect("write fixture file");
+        path.to_string_lossy().into_owned()
+    }
+
+    fn dir(&mut self, name: &str) -> String {
+        let path = self.unique_path(name);
+        std::fs::create_dir_all(&path).expect("create fixture directory");
+        path.to_string_lossy().into_owned()
+    }
+
+    fn path(&mut self, name: &str) -> String {
+        self.unique_path(name).to_string_lossy().into_owned()
+    }
+
+    fn unique_path(&mut self, name: &str) -> PathBuf {
+        self.next_id += 1;
+        self.root.join(format!("{}-{name}", self.next_id))
+    }
+}
+
+impl Drop for TestWorkspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
 }
 
 const ALEATOR_ROUTES: &[&str] = &[
@@ -105,6 +180,26 @@ const TEMPUS_ROUTES: &[&str] = &[
     "tempus:dormiet",
 ];
 
+fn aleator_provider() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>> {
+    Ok(Box::new(aleator::Aleator::new()?))
+}
+
+fn consolum_provider() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>> {
+    Ok(Box::new(consolum::Consolum::new()?))
+}
+
+fn processus_provider() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>> {
+    Ok(Box::new(processus::Processus::new()?))
+}
+
+fn solum_provider() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>> {
+    Ok(Box::new(solum::Solum::new()?))
+}
+
+fn tempus_provider() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>> {
+    Ok(Box::new(tempus::Tempus::new()?))
+}
+
 fn provider_cases() -> [ProviderCase; 5] {
     [
         ProviderCase {
@@ -112,6 +207,7 @@ fn provider_cases() -> [ProviderCase; 5] {
             prefix: "aleator",
             manifest_json: aleator::manifest_json(),
             register: aleator::register,
+            provider: aleator_provider,
             public_routes: ALEATOR_ROUTES,
             excluded_routes: &[],
         },
@@ -120,6 +216,7 @@ fn provider_cases() -> [ProviderCase; 5] {
             prefix: "consolum",
             manifest_json: consolum::manifest_json(),
             register: consolum::register,
+            provider: consolum_provider,
             public_routes: CONSOLUM_ROUTES,
             excluded_routes: &["consolum:fundet"],
         },
@@ -128,6 +225,7 @@ fn provider_cases() -> [ProviderCase; 5] {
             prefix: "processus",
             manifest_json: processus::manifest_json(),
             register: processus::register,
+            provider: processus_provider,
             public_routes: PROCESSUS_ROUTES,
             excluded_routes: &["processus:exi"],
         },
@@ -136,6 +234,7 @@ fn provider_cases() -> [ProviderCase; 5] {
             prefix: "solum",
             manifest_json: solum::manifest_json(),
             register: solum::register,
+            provider: solum_provider,
             public_routes: SOLUM_ROUTES,
             excluded_routes: &["solum:fundet", "solum:leget"],
         },
@@ -144,10 +243,185 @@ fn provider_cases() -> [ProviderCase; 5] {
             prefix: "tempus",
             manifest_json: tempus::manifest_json(),
             register: tempus::register,
+            provider: tempus_provider,
             public_routes: TEMPUS_ROUTES,
             excluded_routes: &["tempus:expectet"],
         },
     ]
+}
+
+fn dispatch_context(cancelled: bool) -> host_kernel::DispatchContext {
+    host_kernel::DispatchContext {
+        cancellation: host_kernel::CancellationProbe::new(move || cancelled),
+    }
+}
+
+fn request(
+    route: &str,
+    fixture: DispatchFixture,
+) -> (host_kernel::RequestFrame, host_kernel::DispatchContext) {
+    (
+        host_kernel::RequestFrame {
+            conversation_id: format!("contract-{route}"),
+            route: route.to_owned(),
+            opener: fixture.opener,
+            target: fixture.target,
+        },
+        dispatch_context(fixture.cancelled),
+    )
+}
+
+fn public_fixture(route: &str, workspace: &mut TestWorkspace) -> DispatchFixture {
+    match route {
+        "aleator:fractum" | "aleator:uuid" => DispatchFixture::new(Valor::Nihil),
+        "aleator:sortire" => {
+            DispatchFixture::new(Valor::Lista(vec![Valor::Numerus(0), Valor::Numerus(0)]))
+        }
+        "aleator:octetos" => DispatchFixture::new(Valor::Numerus(0)),
+        "aleator:semina" => DispatchFixture::new(Valor::Numerus(1)),
+
+        "consolum:hauri" | "consolum:hauriet" => DispatchFixture::new(Valor::Numerus(0)),
+        "consolum:lege" | "consolum:leget" => DispatchFixture::cancelled(Valor::Nihil),
+        "consolum:funde" => DispatchFixture::new(Valor::Octeti(Vec::new())),
+        "consolum:scribe" | "consolum:scribet" | "consolum:dic" | "consolum:dicet"
+        | "consolum:mone" | "consolum:monet" | "consolum:vide" | "consolum:videbit" => {
+            DispatchFixture::new(Valor::Textus(String::new()))
+        }
+        "consolum:audit" | "consolum:loquitur" | "consolum:admonet" => {
+            DispatchFixture::new(Valor::Nihil)
+        }
+
+        "processus:exsequi" | "processus:exsequetur" => {
+            DispatchFixture::new(Valor::Textus("printf ok".to_owned()))
+        }
+        "processus:dimitte" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus("sh".to_owned()),
+            Valor::Textus("-c".to_owned()),
+            Valor::Textus("true".to_owned()),
+        ])),
+        "processus:lege" => {
+            std::env::set_var("FABER_PROVIDER_CONTRACTS_ENV", "ok");
+            DispatchFixture::new(Valor::Textus("FABER_PROVIDER_CONTRACTS_ENV".to_owned()))
+        }
+        "processus:scribe" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus("FABER_PROVIDER_CONTRACTS_WRITE".to_owned()),
+            Valor::Textus("ok".to_owned()),
+        ])),
+        "processus:sedes" | "processus:identitas" | "processus:argumenta" => {
+            DispatchFixture::new(Valor::Nihil)
+        }
+        "processus:muta" => DispatchFixture::new(Valor::Textus(
+            std::env::current_dir()
+                .expect("current dir")
+                .to_string_lossy()
+                .into_owned(),
+        )),
+        "processus:captura" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus("sh".to_owned()),
+            Valor::Textus("-c".to_owned()),
+            Valor::Textus("printf ok".to_owned()),
+        ])),
+
+        "solum:lege"
+        | "solum:hauri"
+        | "solum:hauriet"
+        | "solum:carpe"
+        | "solum:carpiet"
+        | "solum:exstat"
+        | "solum:exstabit"
+        | "solum:directoriumne"
+        | "solum:regularene"
+        | "solum:legibilene"
+        | "solum:vinculumne"
+        | "solum:mensura"
+        | "solum:modus"
+        | "solum:absolve" => {
+            DispatchFixture::new(Valor::Textus(workspace.file("file.txt", "alpha\nbeta\n")))
+        }
+        "solum:partem" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus(workspace.file("range.txt", "alpha")),
+            Valor::Numerus(0),
+            Valor::Numerus(2),
+        ])),
+        "solum:inveni" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus(workspace.file("find.txt", "alpha")),
+            Valor::Textus("ph".to_owned()),
+            Valor::Numerus(0),
+            Valor::Numerus(5),
+        ])),
+        "solum:scribe" | "solum:scribet" | "solum:appone" | "solum:apponet" => {
+            DispatchFixture::new(Valor::Lista(vec![
+                Valor::Textus(workspace.path("write.txt")),
+                Valor::Textus("ok".to_owned()),
+            ]))
+        }
+        "solum:funde" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus(workspace.path("bytes.bin")),
+            Valor::Octeti(vec![1, 2, 3]),
+        ])),
+        "solum:modum" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus(workspace.file("mode.txt", "mode")),
+            Valor::Numerus(0o600),
+        ])),
+        "solum:vincula" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus(workspace.file("symlink-source.txt", "link")),
+            Valor::Textus(workspace.path("symlink-link.txt")),
+        ])),
+        "solum:dele" | "solum:delet" => {
+            DispatchFixture::new(Valor::Textus(workspace.file("delete.txt", "delete")))
+        }
+        "solum:exscribe" | "solum:exscribet" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus(workspace.file("copy-source.txt", "copy")),
+            Valor::Textus(workspace.path("copy-dest.txt")),
+        ])),
+        "solum:renomina" | "solum:renominabit" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus(workspace.file("rename-source.txt", "rename")),
+            Valor::Textus(workspace.path("rename-dest.txt")),
+        ])),
+        "solum:tange" | "solum:tanget" => {
+            DispatchFixture::new(Valor::Textus(workspace.path("touch.txt")))
+        }
+        "solum:sequere" | "solum:sequetur" => {
+            let source = workspace.file("follow-source.txt", "follow");
+            let link = workspace.path("follow-link.txt");
+            std::os::unix::fs::symlink(&source, &link).expect("symlink fixture");
+            DispatchFixture::new(Valor::Textus(link))
+        }
+        "solum:crea" | "solum:creabit" | "solum:amputa" | "solum:amputabit" => {
+            DispatchFixture::new(Valor::Textus(workspace.dir("dir")))
+        }
+        "solum:enumera" | "solum:enumerabit" => {
+            DispatchFixture::new(Valor::Textus(workspace.dir("list-dir")))
+        }
+        "solum:domus" | "solum:temporarium" => DispatchFixture::new(Valor::Nihil),
+        "solum:iunge" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus("a".to_owned()),
+            Valor::Textus("b".to_owned()),
+        ])),
+        "solum:parens" | "solum:nomen" | "solum:suffixum" => {
+            DispatchFixture::new(Valor::Textus("a/b.txt".to_owned()))
+        }
+
+        "tempus:nunc" | "tempus:monotonicum" | "tempus:activum" => {
+            DispatchFixture::new(Valor::Nihil)
+        }
+        "tempus:dormiet" => DispatchFixture::new(Valor::Numerus(0)),
+        other => panic!("missing public dispatch fixture for {other}"),
+    }
+}
+
+fn excluded_fixture(route: &str) -> DispatchFixture {
+    match route {
+        "consolum:fundet" => DispatchFixture::new(Valor::Octeti(Vec::new())),
+        "processus:exi" => DispatchFixture::new(Valor::Numerus(0)),
+        "solum:fundet" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus("ignored".to_owned()),
+            Valor::Octeti(Vec::new()),
+        ])),
+        "solum:leget" => DispatchFixture::cancelled(Valor::Textus("ignored".to_owned())),
+        "tempus:expectet" => DispatchFixture::new(Valor::Numerus(0)),
+        other => panic!("missing excluded dispatch fixture for {other}"),
+    }
 }
 
 #[test]
@@ -189,6 +463,9 @@ fn composed_kernel_registers_unique_provider_identities_and_routes() {
     let mut admitted_routes = BTreeSet::new();
 
     for case in &cases {
+        let provider = (case.provider)()
+            .unwrap_or_else(|error| panic!("create {} provider: {error}", case.name));
+        let mut workspace = TestWorkspace::new(case.name);
         let standalone = parse_manifest(case.manifest_json)
             .unwrap_or_else(|error| panic!("parse {} manifest: {error}", case.name));
         let composed = providers_by_name
@@ -213,6 +490,24 @@ fn composed_kernel_registers_unique_provider_identities_and_routes() {
         for route in case.public_routes {
             assert!(admitted_routes.insert(*route), "duplicate route {route}");
             assert!(kernel.supports_route(route), "kernel should admit {route}");
+            let fixture = public_fixture(route, &mut workspace);
+            let expect_cancelled = fixture.cancelled;
+            let (request, context) = request(route, fixture);
+            if expect_cancelled {
+                let result = provider.dispatch(&request, &context);
+                assert!(
+                    !matches!(&result, Err(error) if error.code == "E_NO_ROUTE"),
+                    "{} manifest route {route} must reach Provider::dispatch, got {result:?}",
+                    case.name
+                );
+            } else {
+                let result = kernel.dispatch(&request, &context);
+                assert!(
+                    result.is_ok(),
+                    "{} manifest route {route} must satisfy kernel dispatch with safe fixture, got {result:?}",
+                    case.name
+                );
+            }
         }
         for route in case.excluded_routes {
             assert!(
@@ -221,6 +516,19 @@ fn composed_kernel_registers_unique_provider_identities_and_routes() {
                 case.name
             );
             assert!(!kernel.supports_route(route), "kernel should deny {route}");
+            let (request, context) = request(route, excluded_fixture(route));
+            let error = match provider.dispatch(&request, &context) {
+                Ok(reply) => panic!(
+                    "{} should reject excluded route {route}, got {reply:?}",
+                    case.name
+                ),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code, "E_NO_ROUTE",
+                "{} excluded route {route} must be rejected by dispatch",
+                case.name
+            );
         }
     }
 
