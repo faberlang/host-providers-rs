@@ -69,6 +69,54 @@ fn byte_and_string_arguments_decode_from_ordered_openers() {
 }
 
 #[test]
+fn hauri_rejects_over_limit_before_allocation_and_keeps_zero_policy() {
+    let provider = Consolum::new().expect("provider");
+
+    let zero = provider
+        .dispatch(
+            &RequestFrame {
+                conversation_id: "zero".into(),
+                route: "consolum:hauri".into(),
+                opener: Valor::Numerus(0),
+                target: None,
+            },
+            &active_context(),
+        )
+        .expect("zero-byte stdin read");
+    assert!(matches!(zero.contents.as_slice(), [ProviderContent::Byte(value)] if value.is_empty()));
+
+    let negative = provider
+        .dispatch(
+            &RequestFrame {
+                conversation_id: "negative".into(),
+                route: "consolum:hauri".into(),
+                opener: Valor::Numerus(-1),
+                target: None,
+            },
+            &active_context(),
+        )
+        .expect("negative stdin read clamps to zero");
+    assert!(
+        matches!(negative.contents.as_slice(), [ProviderContent::Byte(value)] if value.is_empty())
+    );
+
+    let error = provider
+        .dispatch(
+            &RequestFrame {
+                conversation_id: "too-many".into(),
+                route: "consolum:hauri".into(),
+                opener: Valor::Numerus(MAX_STDIN_READ_BYTES as i64 + 1),
+                target: None,
+            },
+            &active_context(),
+        )
+        .expect_err("over-limit stdin read must fail before allocation");
+    assert_eq!(error.code, "E_INVALID_ARGS");
+    assert!(error.message.contains("consolum:hauri"));
+    assert!(error.message.contains(&MAX_STDIN_READ_BYTES.to_string()));
+}
+
+#[test]
 fn read_line_returns_text_before_newline() {
     let reply = dispatch_line(Cursor::new(b"salve\nreliquum".to_vec()));
 

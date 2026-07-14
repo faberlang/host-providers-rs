@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const MAX_RANDOM_BYTES: usize = 1024 * 1024;
+
 pub struct Aleator {
     registration: ProviderRegistration,
 }
@@ -97,8 +99,7 @@ fn sort_integer(opener: &Valor) -> HostResult<ProviderReply> {
 
 fn random_bytes_route(opener: &Valor) -> HostResult<ProviderReply> {
     let n = i64_arg(opener, 0, "n")?;
-    let len = usize::try_from(n.max(0))
-        .map_err(|_| HostError::invalid_args("n is too large for aleator:octetos"))?;
+    let len = bounded_non_negative_len(n, MAX_RANDOM_BYTES, "aleator:octetos", "n")?;
     let mut bytes = vec![0_u8; len];
     if len > 0 {
         File::open("/dev/urandom")
@@ -108,6 +109,20 @@ fn random_bytes_route(opener: &Valor) -> HostResult<ProviderReply> {
             })?;
     }
     Ok(ProviderReply::byte(bytes))
+}
+
+fn bounded_non_negative_len(value: i64, max: usize, route: &str, name: &str) -> HostResult<usize> {
+    if value <= 0 {
+        return Ok(0);
+    }
+    let len = usize::try_from(value)
+        .map_err(|_| HostError::invalid_args(format!("{route} {name} is too large")))?;
+    if len > max {
+        return Err(HostError::invalid_args(format!(
+            "{route} {name} must be at most {max} bytes"
+        )));
+    }
+    Ok(len)
 }
 
 fn uuid_route() -> HostResult<ProviderReply> {
@@ -200,5 +215,58 @@ mod tests {
         assert!(
             matches!(bytes.contents.as_slice(), [ProviderContent::Byte(value)] if value.len() == 4)
         );
+    }
+
+    #[test]
+    fn octetos_rejects_over_limit_before_allocation_and_keeps_zero_policy() {
+        let provider = Aleator::new().expect("provider");
+        let context = DispatchContext {
+            cancellation: host_kernel::CancellationProbe::new(|| false),
+        };
+
+        let zero = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "zero".into(),
+                    route: "aleator:octetos".into(),
+                    opener: Valor::Numerus(0),
+                    target: None,
+                },
+                &context,
+            )
+            .expect("zero bytes");
+        assert!(
+            matches!(zero.contents.as_slice(), [ProviderContent::Byte(value)] if value.is_empty())
+        );
+
+        let negative = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "negative".into(),
+                    route: "aleator:octetos".into(),
+                    opener: Valor::Numerus(-1),
+                    target: None,
+                },
+                &context,
+            )
+            .expect("negative byte count clamps to zero");
+        assert!(
+            matches!(negative.contents.as_slice(), [ProviderContent::Byte(value)] if value.is_empty())
+        );
+
+        let error = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "too-many".into(),
+                    route: "aleator:octetos".into(),
+                    opener: Valor::Numerus(MAX_RANDOM_BYTES as i64 + 1),
+                    target: None,
+                },
+                &context,
+            )
+            .expect_err("over-limit random byte request must fail before allocation");
+        assert_eq!(error.code, "E_INVALID_ARGS");
+        assert!(error.message.contains("aleator:octetos"));
+        assert!(error.message.contains(&MAX_RANDOM_BYTES.to_string()));
     }
 }

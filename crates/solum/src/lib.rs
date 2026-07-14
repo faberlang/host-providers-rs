@@ -12,6 +12,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+const MAX_RANGE_READ_BYTES: usize = 1024 * 1024;
+
 pub struct Solum {
     registration: ProviderRegistration,
 }
@@ -122,7 +124,7 @@ fn read_bytes(opener: &Valor) -> HostResult<ProviderReply> {
 fn read_byte_range(opener: &Valor) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
     let start = non_negative_offset(i64_arg(opener, 1, "initium")?, "initium")?;
-    let length = non_negative_length(i64_arg(opener, 2, "longitudo")?, "longitudo")?;
+    let length = bounded_range_length(i64_arg(opener, 2, "longitudo")?, "solum:partem")?;
     let mut file = File::open(&path)
         .map_err(|error| HostError::internal(format!("solum:partem open failed: {error}")))?;
     file.seek(SeekFrom::Start(start))
@@ -138,7 +140,7 @@ fn find_text_range(opener: &Valor) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
     let pattern = string_arg(opener, 1, "exemplar")?;
     let start = non_negative_offset(i64_arg(opener, 2, "initium")?, "initium")?;
-    let length = non_negative_length(i64_arg(opener, 3, "longitudo")?, "longitudo")?;
+    let length = bounded_range_length(i64_arg(opener, 3, "longitudo")?, "solum:inveni")?;
     let mut file = File::open(&path)
         .map_err(|error| HostError::internal(format!("solum:inveni open failed: {error}")))?;
     file.seek(SeekFrom::Start(start))
@@ -436,6 +438,16 @@ fn non_negative_length(value: i64, key: &str) -> HostResult<usize> {
         .map_err(|_| HostError::invalid_args(format!("{key} must be non-negative")))
 }
 
+fn bounded_range_length(value: i64, route: &str) -> HostResult<usize> {
+    let length = non_negative_length(value, "longitudo")?;
+    if length > MAX_RANGE_READ_BYTES {
+        return Err(HostError::invalid_args(format!(
+            "{route} longitudo must be at most {MAX_RANGE_READ_BYTES} bytes"
+        )));
+    }
+    Ok(length)
+}
+
 fn positional<'a>(value: &'a Valor, index: usize, name: &str) -> HostResult<&'a Valor> {
     match value {
         Valor::Lista(values) => values.get(index).ok_or_else(|| {
@@ -635,6 +647,106 @@ mod tests {
             found.contents.as_slice(),
             [ProviderContent::Item(Valor::Numerus(6))]
         ));
+        std::fs::remove_file(path).expect("cleanup");
+    }
+
+    #[test]
+    fn partem_and_inveni_reject_over_limit_ranges_before_allocation() {
+        let provider = Solum::new().expect("provider");
+        let path =
+            std::env::temp_dir().join(format!("faber-public-solum-limit-{}", std::process::id()));
+        std::fs::write(&path, b"payload").expect("fixture");
+        let path_s = path.to_string_lossy().into_owned();
+
+        let zero_part = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "part-zero".into(),
+                    route: "solum:partem".into(),
+                    opener: Valor::Lista(vec![
+                        Valor::Textus(path_s.clone()),
+                        Valor::Numerus(0),
+                        Valor::Numerus(0),
+                    ]),
+                    target: None,
+                },
+                &context(),
+            )
+            .expect("zero-length partem");
+        assert!(
+            matches!(zero_part.contents.as_slice(), [ProviderContent::Byte(bytes)] if bytes.is_empty())
+        );
+
+        for (route, opener) in [
+            (
+                "solum:partem",
+                Valor::Lista(vec![
+                    Valor::Textus(path_s.clone()),
+                    Valor::Numerus(0),
+                    Valor::Numerus(MAX_RANGE_READ_BYTES as i64 + 1),
+                ]),
+            ),
+            (
+                "solum:inveni",
+                Valor::Lista(vec![
+                    Valor::Textus(path_s.clone()),
+                    Valor::Textus("pay".into()),
+                    Valor::Numerus(0),
+                    Valor::Numerus(MAX_RANGE_READ_BYTES as i64 + 1),
+                ]),
+            ),
+        ] {
+            let error = provider
+                .dispatch(
+                    &RequestFrame {
+                        conversation_id: format!("{route}-too-long"),
+                        route: route.to_owned(),
+                        opener,
+                        target: None,
+                    },
+                    &context(),
+                )
+                .expect_err("over-limit range must fail before allocation");
+            assert_eq!(error.code, "E_INVALID_ARGS");
+            assert!(error.message.contains(route));
+            assert!(error.message.contains(&MAX_RANGE_READ_BYTES.to_string()));
+        }
+
+        for (route, opener) in [
+            (
+                "solum:partem",
+                Valor::Lista(vec![
+                    Valor::Textus(path_s.clone()),
+                    Valor::Numerus(0),
+                    Valor::Numerus(-1),
+                ]),
+            ),
+            (
+                "solum:inveni",
+                Valor::Lista(vec![
+                    Valor::Textus(path_s),
+                    Valor::Textus("pay".into()),
+                    Valor::Numerus(0),
+                    Valor::Numerus(-1),
+                ]),
+            ),
+        ] {
+            let error = provider
+                .dispatch(
+                    &RequestFrame {
+                        conversation_id: format!("{route}-negative"),
+                        route: route.to_owned(),
+                        opener,
+                        target: None,
+                    },
+                    &context(),
+                )
+                .expect_err("negative range length must remain invalid");
+            assert_eq!(error.code, "E_INVALID_ARGS");
+            assert!(error.message.contains("longitudo"));
+            assert!(error.message.contains("non-negative"));
+        }
+
         std::fs::remove_file(path).expect("cleanup");
     }
 

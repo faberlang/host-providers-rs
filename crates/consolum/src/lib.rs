@@ -10,6 +10,8 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::{Arc, Mutex};
 
+const MAX_STDIN_READ_BYTES: usize = 1024 * 1024;
+
 pub struct Consolum {
     registration: ProviderRegistration,
     line_reader: Option<Mutex<Box<dyn Read + Send>>>,
@@ -79,7 +81,12 @@ impl Provider for Consolum {
 }
 
 fn read_stdin(opener: &Valor, context: &DispatchContext) -> HostResult<ProviderReply> {
-    let magnitude = i64_arg(opener, 0, "magnitudo")?.max(0) as usize;
+    let magnitude = bounded_non_negative_len(
+        i64_arg(opener, 0, "magnitudo")?,
+        MAX_STDIN_READ_BYTES,
+        "consolum:hauri",
+        "magnitudo",
+    )?;
     ensure_active(context)?;
     if magnitude == 0 {
         return Ok(ProviderReply::byte(Vec::new()));
@@ -99,6 +106,20 @@ fn read_stdin(opener: &Valor, context: &DispatchContext) -> HostResult<ProviderR
     ensure_active(context)?;
     buffer.truncate(bytes_read);
     Ok(ProviderReply::byte(buffer))
+}
+
+fn bounded_non_negative_len(value: i64, max: usize, route: &str, name: &str) -> HostResult<usize> {
+    if value <= 0 {
+        return Ok(0);
+    }
+    let len = usize::try_from(value)
+        .map_err(|_| HostError::invalid_args(format!("{route} {name} is too large")))?;
+    if len > max {
+        return Err(HostError::invalid_args(format!(
+            "{route} {name} must be at most {max} bytes"
+        )));
+    }
+    Ok(len)
 }
 
 impl Consolum {
