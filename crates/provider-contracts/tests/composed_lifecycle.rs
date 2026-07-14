@@ -435,6 +435,81 @@ fn excluded_fixture(route: &str) -> DispatchFixture {
 }
 
 #[test]
+fn solum_read_routes_match_manifest_contracts_through_kernel_dispatch() {
+    let mut kernel = Kernel::new();
+    solum::register(&mut kernel).expect("register solum");
+    let mut workspace = TestWorkspace::new("solum-read-contracts");
+    let path = workspace.file("read.txt", "prima\nsecunda\n");
+
+    let (lege_request, lege_context) = request(
+        "solum:lege",
+        DispatchFixture {
+            opener: Valor::Textus(path.clone()),
+            target: Some(std::any::type_name::<String>().to_owned()),
+            cancelled: false,
+        },
+    );
+    let lege = kernel
+        .dispatch(&lege_request, &lege_context)
+        .expect("solum:lege textus dispatch");
+    assert!(
+        matches!(
+            lege.contents.as_slice(),
+            [host_kernel::ProviderContent::Item(Valor::Textus(text))] if text == "prima\nsecunda\n"
+        ),
+        "solum:lege must satisfy its textus manifest result, got {lege:?}"
+    );
+
+    for target in [
+        std::any::type_name::<Vec<String>>(),
+        std::any::type_name::<Vec<u8>>(),
+    ] {
+        let (request, context) = request(
+            "solum:lege",
+            DispatchFixture {
+                opener: Valor::Textus(path.clone()),
+                target: Some(target.to_owned()),
+                cancelled: false,
+            },
+        );
+        let error = kernel
+            .dispatch(&request, &context)
+            .expect_err("solum:lege must reject non-text targets before returning frames");
+        assert_eq!(error.code, "E_INTERNAL");
+        assert!(
+            error.message.contains("use solum:carpe") && error.message.contains("solum:hauri"),
+            "solum:lege target error must point at manifest routes, got {error:?}"
+        );
+    }
+
+    let (carpe_request, carpe_context) = request(
+        "solum:carpe",
+        DispatchFixture::new(Valor::Textus(path.clone())),
+    );
+    let carpe = kernel
+        .dispatch(&carpe_request, &carpe_context)
+        .expect("solum:carpe lista<textus> dispatch");
+    assert_eq!(
+        carpe.contents.as_slice(),
+        &[
+            host_kernel::ProviderContent::Item(Valor::Textus("prima".to_owned())),
+            host_kernel::ProviderContent::Item(Valor::Textus("secunda".to_owned())),
+        ],
+        "solum:carpe must carry the list contract formerly claimed by solum:lege"
+    );
+
+    let (hauri_request, hauri_context) =
+        request("solum:hauri", DispatchFixture::new(Valor::Textus(path)));
+    let hauri = kernel
+        .dispatch(&hauri_request, &hauri_context)
+        .expect("solum:hauri octeti dispatch");
+    assert!(
+        matches!(hauri.contents.as_slice(), [host_kernel::ProviderContent::Byte(bytes)] if bytes == b"prima\nsecunda\n"),
+        "solum:hauri must carry the byte contract formerly claimed by solum:lege, got {hauri:?}"
+    );
+}
+
+#[test]
 fn composed_kernel_registers_unique_provider_identities_and_routes() {
     let cases = provider_cases();
     let mut kernel = Kernel::new();

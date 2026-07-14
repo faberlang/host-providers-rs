@@ -84,7 +84,7 @@ impl Provider for Solum {
     }
 }
 
-/// One Item per line — shape for `try_sermo_materialize_lista` (`lege` lista + `carpe`).
+/// One Item per line — shape for `try_sermo_materialize_lista` through `solum:carpe`.
 fn read_file_lines(path: &str, err_label: &str) -> HostResult<ProviderReply> {
     let text = fs::read_to_string(path)
         .map_err(|error| HostError::internal(format!("{err_label}: {error}")))?;
@@ -93,34 +93,23 @@ fn read_file_lines(path: &str, err_label: &str) -> HostResult<ProviderReply> {
     ))
 }
 
-/// Read file for `solum:lege`, honoring materialization target (parity with faber-runtime).
+/// Read file for `solum:lege`.
 ///
-/// Contract (matches radix codegen materializers):
-/// - `textus` / default → one Item `Textus` (full file)
-/// - `lista<textus>` → multi-Item lines (`try_sermo_materialize_lista`), same as carpe
-/// - `octeti` → byte reply (`try_sermo_materialize_octeti`)
+/// The manifest declares a single `textus` result contract for this route.
+/// List and byte reads use `solum:carpe` and `solum:hauri` so kernel result
+/// validation observes one stable result shape per route.
 fn read_text(opener: &Valor, target: Option<&str>) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
     let textus = std::any::type_name::<String>();
-    let lista_textus = std::any::type_name::<Vec<String>>();
-    let octeti = std::any::type_name::<Vec<u8>>();
-    if target.is_none() || target == Some(textus) {
-        let text = fs::read_to_string(&path)
-            .map_err(|error| HostError::internal(format!("solum:lege failed: {error}")))?;
-        return Ok(ProviderReply::item(Valor::Textus(text)));
+    if target.is_some_and(|target| target != textus) {
+        return Err(HostError::internal(format!(
+            "solum:lege target `{}` is not supported; use solum:carpe for lista<textus> or solum:hauri for octeti",
+            target.unwrap_or("<unknown>")
+        )));
     }
-    if target == Some(lista_textus) {
-        return read_file_lines(&path, "solum:lege failed");
-    }
-    if target == Some(octeti) {
-        let bytes = fs::read(&path)
-            .map_err(|error| HostError::internal(format!("solum:lege failed: {error}")))?;
-        return Ok(ProviderReply::byte(bytes));
-    }
-    Err(HostError::internal(format!(
-        "solum:lege target `{}` is not supported",
-        target.unwrap_or("<unknown>")
-    )))
+    let text = fs::read_to_string(&path)
+        .map_err(|error| HostError::internal(format!("solum:lege failed: {error}")))?;
+    Ok(ProviderReply::item(Valor::Textus(text)))
 }
 
 fn read_bytes(opener: &Valor) -> HostResult<ProviderReply> {
@@ -650,40 +639,19 @@ mod tests {
     }
 
     #[test]
-    fn lege_honors_lista_textus_target_as_multi_item_lines() {
+    fn lege_is_textus_only_and_rejects_list_or_byte_targets() {
         let provider = Solum::new().expect("provider");
         let path =
             std::env::temp_dir().join(format!("faber-public-solum-lege-{}", std::process::id()));
         std::fs::write(&path, "prima\nsecunda\n").expect("fixture");
         let path_s = path.to_string_lossy().into_owned();
-        let lista_target = std::any::type_name::<Vec<String>>().to_owned();
-
-        // Codegen path: try_sermo_materialize_lista — one Item per line (carpe shape).
-        let lines = provider
-            .dispatch(
-                &RequestFrame {
-                    conversation_id: "lege-lista".into(),
-                    route: "solum:lege".into(),
-                    opener: Valor::Textus(path_s.clone()),
-                    target: Some(lista_target),
-                },
-                &context(),
-            )
-            .expect("lege lista");
-        assert_eq!(
-            lines.contents.as_slice(),
-            &[
-                ProviderContent::Item(Valor::Textus("prima".into())),
-                ProviderContent::Item(Valor::Textus("secunda".into())),
-            ]
-        );
 
         let text = provider
             .dispatch(
                 &RequestFrame {
                     conversation_id: "lege-text".into(),
                     route: "solum:lege".into(),
-                    opener: Valor::Textus(path_s),
+                    opener: Valor::Textus(path_s.clone()),
                     target: Some(std::any::type_name::<String>().to_owned()),
                 },
                 &context(),
@@ -693,6 +661,27 @@ mod tests {
             text.contents.as_slice(),
             [ProviderContent::Item(Valor::Textus(s))] if s == "prima\nsecunda\n"
         ));
+
+        for target in [
+            std::any::type_name::<Vec<String>>(),
+            std::any::type_name::<Vec<u8>>(),
+        ] {
+            let error = provider
+                .dispatch(
+                    &RequestFrame {
+                        conversation_id: "lege-target".into(),
+                        route: "solum:lege".into(),
+                        opener: Valor::Textus(path_s.clone()),
+                        target: Some(target.to_owned()),
+                    },
+                    &context(),
+                )
+                .expect_err("non-text solum:lege target must not bypass manifest contract");
+            assert_eq!(error.code, "E_INTERNAL");
+            assert!(error.message.contains("solum:lege target"));
+            assert!(error.message.contains("solum:carpe"));
+            assert!(error.message.contains("solum:hauri"));
+        }
         std::fs::remove_file(&path).expect("cleanup");
     }
 

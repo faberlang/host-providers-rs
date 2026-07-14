@@ -1,6 +1,6 @@
 # Provider Manifest / Dispatch Coverage Packet
 
-**Status:** coverage packet recorded; no manifest/dispatch mismatch found
+**Status:** coverage packet recorded; solum read-route manifest mismatch fixed
 **Date:** 2026-07-14
 **Scope:** `aleator`, `consolum`, `processus`, `solum`, and `tempus` provider
 crates in this repository. This packet does not claim public runnable support,
@@ -24,11 +24,17 @@ claims still require downstream package/export/run evidence outside this repo.
 | `aleator` | `crates/aleator/src/manifest.json` | 5 | All manifest routes handled by `Aleator::dispatch`: `fractum`, `sortire`, `octetos`, `uuid`, `semina`. | `manifest_registers_all_canonical_routes`; seeded integer/bytes reply-shape test. | Covered locally. |
 | `consolum` | `crates/consolum/src/manifest.json` | 16 | All manifest routes handled by `Consolum::dispatch`; sync/async pairs share local handlers where appropriate. | Manifest canonical-route/legacy-alias test; terminal predicate shape; opener decoding; Unix cancellation tests. | Covered locally. |
 | `processus` | `crates/processus/src/manifest.json` | 10 | All manifest routes handled by `Processus::dispatch`: shell, capture, detached spawn, env, cwd, pid, args. `processus:exi` is intentionally unmanifested and rejected until host exit has a protocol-visible terminal response. | Manifest route count and `exi` exclusion; capture shape; shell stdout; cancellation and descendant termination tests. | Covered locally. |
-| `solum` | `crates/solum/src/manifest.json` | 45 | All manifest routes handled by `Solum::dispatch`; path helpers and filesystem operations are included. | Manifest canonical-route/legacy-alias test; mode/symlink; range/read/find; target materialization; delete/touch error propagation. | Covered locally. |
+| `solum` | `crates/solum/src/manifest.json` | 45 | All manifest routes handled by `Solum::dispatch`; `solum:lege` is text-only, while `solum:carpe` carries list-of-text line reads and `solum:hauri`/`solum:hauriet` carry byte reads. Path helpers and filesystem operations are included. | Manifest canonical-route/legacy-alias test; mode/symlink; range/read/find; kernel-level read-route contract split; delete/touch error propagation. | Covered locally. |
 | `tempus` | `crates/tempus/src/manifest.json` | 4 | All manifest routes handled by `Tempus::dispatch`: `nunc`, `monotonicum`, `activum`, `dormiet`. | Manifest legacy-alias test; sleep/cancellation; clock scalar shape; invalid duration test. | Covered locally. |
 
 Read-only comparison on 2026-07-14 found no manifest route missing from the
 matching Rust dispatch strings for any of the five providers.
+
+Follow-up fix on 2026-07-14 reconciled the `solum:lege` result contract with
+kernel validation: `solum:lege` now rejects non-text materialization targets
+instead of returning list or byte frames behind a `textus` manifest result.
+List and byte read behavior remains available through the manifest-matched
+`solum:carpe` and `solum:hauri` routes.
 
 ## Unsupported / Deferred Route Families
 
