@@ -55,7 +55,6 @@ impl Provider for Processus {
             "processus:argumenta" => Ok(ProviderReply::list(
                 std::env::args().skip(1).map(Valor::Textus),
             )),
-            "processus:exi" => exit_process(&request.opener),
             "processus:captura" => capture_process(&request.opener, context),
             other => Err(HostError::no_route(format!(
                 "no built-in processus syscall registered for {other}"
@@ -333,11 +332,6 @@ fn set_current_dir(opener: &Valor) -> HostResult<ProviderReply> {
     Ok(ProviderReply::vacuum())
 }
 
-fn exit_process(opener: &Valor) -> HostResult<ProviderReply> {
-    let code = i64_arg(opener, 0, "code")?;
-    std::process::exit(code.clamp(0, i64::from(u8::MAX)) as i32);
-}
-
 fn positional<'a>(value: &'a Valor, index: usize, name: &str) -> HostResult<&'a Valor> {
     match value {
         Valor::Lista(values) => values.get(index).ok_or_else(|| {
@@ -346,15 +340,6 @@ fn positional<'a>(value: &'a Valor, index: usize, name: &str) -> HostResult<&'a 
         value if index == 0 => Ok(value),
         _ => Err(HostError::invalid_args(format!(
             "missing positional argument {index} ({name})"
-        ))),
-    }
-}
-
-fn i64_arg(value: &Valor, index: usize, name: &str) -> HostResult<i64> {
-    match positional(value, index, name)? {
-        Valor::Numerus(number) => Ok(*number),
-        _ => Err(HostError::invalid_args(format!(
-            "{name} must be an integer"
         ))),
     }
 }
@@ -403,7 +388,32 @@ mod tests {
     fn manifest_registers_all_process_routes() {
         let mut kernel = Kernel::new();
         register(&mut kernel).expect("register processus");
-        assert_eq!(kernel.manifest().providers[0].calls.len(), 11);
+        let calls = &kernel.manifest().providers[0].calls;
+        assert_eq!(calls.len(), 10);
+        assert!(
+            calls.iter().all(|call| call.route != "processus:exi"),
+            "processus:exi must stay unmanifested until host exit has a protocol-visible terminal response"
+        );
+    }
+
+    #[test]
+    fn exit_route_is_not_dispatchable_through_provider() {
+        let provider = Processus::new().expect("provider");
+        let error = provider
+            .dispatch(
+                &RequestFrame {
+                    conversation_id: "exit".into(),
+                    route: "processus:exi".into(),
+                    opener: Valor::Numerus(7),
+                    target: None,
+                },
+                &DispatchContext {
+                    cancellation: host_kernel::CancellationProbe::new(|| true),
+                },
+            )
+            .expect_err("exit route must be rejected as an ordinary host error");
+
+        assert_eq!(error.code, "E_NO_ROUTE");
     }
 
     #[test]

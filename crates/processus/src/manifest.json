@@ -13,7 +13,6 @@
     {"route": "processus:muta", "summary": "Change the current working directory.", "opener": "textus", "result": "vacuum"},
     {"route": "processus:identitas", "summary": "Return the process id.", "opener": "vacuum", "result": "numerus"},
     {"route": "processus:argumenta", "summary": "Return host-provided program arguments.", "opener": "vacuum", "result": "lista<textus>"},
-    {"route": "processus:exi", "summary": "Exit the process with a code.", "opener": "numerus", "result": "numquam"},
     {"route": "processus:captura", "summary": "Execute argv and capture status and output.", "opener": "lista<textus>", "result": "valor"}
   ],
   "native_dependencies": []
