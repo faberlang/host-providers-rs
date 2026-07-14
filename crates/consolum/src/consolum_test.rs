@@ -1,5 +1,27 @@
 use super::*;
 use host_kernel::ProviderContent;
+use std::io::{Cursor, Read};
+
+fn active_context() -> DispatchContext {
+    DispatchContext {
+        cancellation: host_kernel::CancellationProbe::new(|| false),
+    }
+}
+
+fn dispatch_line(reader: impl Read + Send + 'static) -> ProviderReply {
+    let provider = Consolum::with_line_reader_for_tests(reader).expect("provider");
+    provider
+        .dispatch(
+            &RequestFrame {
+                conversation_id: "read-line".into(),
+                route: "consolum:lege".into(),
+                opener: Valor::Nihil,
+                target: None,
+            },
+            &active_context(),
+        )
+        .expect("read line")
+}
 
 #[test]
 fn manifest_omits_fundet_alias_and_registers_canonical_routes() {
@@ -44,6 +66,36 @@ fn byte_and_string_arguments_decode_from_ordered_openers() {
         "ok"
     );
     assert!(i64_arg(&Valor::Textus("bad".into()), 0, "n").is_err());
+}
+
+#[test]
+fn read_line_returns_text_before_newline() {
+    let reply = dispatch_line(Cursor::new(b"salve\nreliquum".to_vec()));
+
+    assert!(matches!(
+        reply.contents.as_slice(),
+        [ProviderContent::Item(Valor::Textus(line))] if line == "salve"
+    ));
+}
+
+#[test]
+fn read_line_returns_eof_terminated_text() {
+    let reply = dispatch_line(Cursor::new(b"salve".to_vec()));
+
+    assert!(matches!(
+        reply.contents.as_slice(),
+        [ProviderContent::Item(Valor::Textus(line))] if line == "salve"
+    ));
+}
+
+#[test]
+fn read_line_returns_empty_text_at_empty_eof() {
+    let reply = dispatch_line(Cursor::new(Vec::new()));
+
+    assert!(matches!(
+        reply.contents.as_slice(),
+        [ProviderContent::Item(Valor::Textus(line))] if line.is_empty()
+    ));
 }
 
 #[cfg(unix)]

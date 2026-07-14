@@ -8,16 +8,29 @@ use host_kernel::{
 use std::io::{self, IsTerminal, Read, Write};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct Consolum {
     registration: ProviderRegistration,
+    line_reader: Option<Mutex<Box<dyn Read + Send>>>,
 }
 
 impl Consolum {
     pub fn new() -> HostResult<Self> {
         Ok(Self {
             registration: ProviderRegistration::new(host_kernel::parse_manifest(manifest_json())?),
+            line_reader: None,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn with_line_reader_for_tests<R>(reader: R) -> HostResult<Self>
+    where
+        R: Read + Send + 'static,
+    {
+        Ok(Self {
+            registration: ProviderRegistration::new(host_kernel::parse_manifest(manifest_json())?),
+            line_reader: Some(Mutex::new(Box::new(reader))),
         })
     }
 }
@@ -42,7 +55,7 @@ impl Provider for Consolum {
     ) -> HostResult<ProviderReply> {
         match request.route.as_str() {
             "consolum:hauri" | "consolum:hauriet" => read_stdin(&request.opener, context),
-            "consolum:lege" | "consolum:leget" => read_line(context),
+            "consolum:lege" | "consolum:leget" => self.read_line(context),
             "consolum:funde" => write_stdout_bytes(&request.opener, context),
             "consolum:scribe" | "consolum:scribet" => write_stdout_line(&request.opener, context),
             "consolum:dic" | "consolum:dicet" => write_stdout(&request.opener, context),
@@ -88,20 +101,47 @@ fn read_stdin(opener: &Valor, context: &DispatchContext) -> HostResult<ProviderR
     Ok(ProviderReply::byte(buffer))
 }
 
-fn read_line(context: &DispatchContext) -> HostResult<ProviderReply> {
-    let mut stdin = io::stdin().lock();
+impl Consolum {
+    fn read_line(&self, context: &DispatchContext) -> HostResult<ProviderReply> {
+        if let Some(reader) = &self.line_reader {
+            let mut reader = reader
+                .lock()
+                .map_err(|_error| HostError::internal("consolum line reader lock poisoned"))?;
+            return read_line_from(&mut **reader, context, || Ok(()));
+        }
+
+        let mut stdin = io::stdin().lock();
+        #[cfg(unix)]
+        let stdin_fd = stdin.as_raw_fd();
+        #[cfg(unix)]
+        return read_line_from(&mut stdin, context, || {
+            wait_for_fd(
+                stdin_fd,
+                libc::POLLIN as libc::c_short,
+                context,
+                "consolum:lege",
+            )
+        });
+        #[cfg(not(unix))]
+        read_line_from(&mut stdin, context, || Ok(()))
+    }
+}
+
+fn read_line_from<R, W>(
+    reader: &mut R,
+    context: &DispatchContext,
+    mut wait_until_readable: W,
+) -> HostResult<ProviderReply>
+where
+    R: Read + ?Sized,
+    W: FnMut() -> HostResult<()>,
+{
     let mut bytes = Vec::new();
     loop {
         ensure_active(context)?;
-        #[cfg(unix)]
-        wait_for_fd(
-            stdin.as_raw_fd(),
-            libc::POLLIN as libc::c_short,
-            context,
-            "consolum:lege",
-        )?;
+        wait_until_readable()?;
         let mut byte = [0_u8; 1];
-        let count = stdin
+        let count = reader
             .read(&mut byte)
             .map_err(|error| HostError::internal(format!("failed to read stdin line: {error}")))?;
         if count == 0 {

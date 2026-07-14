@@ -1,7 +1,9 @@
 use faber::Valor;
 use host_kernel::{parse_manifest, Kernel};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct ProviderCase {
@@ -185,7 +187,15 @@ fn aleator_provider() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>>
 }
 
 fn consolum_provider() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>> {
-    Ok(Box::new(consolum::Consolum::new()?))
+    Ok(Box::new(consolum::Consolum::with_line_reader_for_tests(
+        Cursor::new(b"contract-standalone\n".to_vec()),
+    )?))
+}
+
+fn register_consolum_contract_provider(kernel: &mut Kernel) -> host_kernel::HostResult<()> {
+    kernel.register(Arc::new(consolum::Consolum::with_line_reader_for_tests(
+        Cursor::new(b"contract-lege\ncontract-leget\n".to_vec()),
+    )?))
 }
 
 fn processus_provider() -> host_kernel::HostResult<Box<dyn host_kernel::Provider>> {
@@ -215,7 +225,7 @@ fn provider_cases() -> [ProviderCase; 5] {
             name: "consolum",
             prefix: "consolum",
             manifest_json: consolum::manifest_json(),
-            register: consolum::register,
+            register: register_consolum_contract_provider,
             provider: consolum_provider,
             public_routes: CONSOLUM_ROUTES,
             excluded_routes: &["consolum:fundet"],
@@ -281,7 +291,7 @@ fn public_fixture(route: &str, workspace: &mut TestWorkspace) -> DispatchFixture
         "aleator:semina" => DispatchFixture::new(Valor::Numerus(1)),
 
         "consolum:hauri" | "consolum:hauriet" => DispatchFixture::new(Valor::Numerus(0)),
-        "consolum:lege" | "consolum:leget" => DispatchFixture::cancelled(Valor::Nihil),
+        "consolum:lege" | "consolum:leget" => DispatchFixture::new(Valor::Nihil),
         "consolum:funde" => DispatchFixture::new(Valor::Octeti(Vec::new())),
         "consolum:scribe" | "consolum:scribet" | "consolum:dic" | "consolum:dicet"
         | "consolum:mone" | "consolum:monet" | "consolum:vide" | "consolum:videbit" => {
@@ -490,6 +500,14 @@ fn composed_kernel_registers_unique_provider_identities_and_routes() {
         for route in case.public_routes {
             assert!(admitted_routes.insert(*route), "duplicate route {route}");
             assert!(kernel.supports_route(route), "kernel should admit {route}");
+            if matches!(*route, "consolum:lege" | "consolum:leget") {
+                let call = standalone
+                    .calls
+                    .iter()
+                    .find(|call| call.route == *route)
+                    .unwrap_or_else(|| panic!("manifest missing {route}"));
+                assert_eq!(call.result, "textus");
+            }
             let fixture = public_fixture(route, &mut workspace);
             let expect_cancelled = fixture.cancelled;
             let (request, context) = request(route, fixture);
@@ -507,6 +525,16 @@ fn composed_kernel_registers_unique_provider_identities_and_routes() {
                     "{} manifest route {route} must satisfy kernel dispatch with safe fixture, got {result:?}",
                     case.name
                 );
+                if matches!(*route, "consolum:lege" | "consolum:leget") {
+                    let reply = result.expect("line read result");
+                    assert!(
+                        matches!(
+                            reply.contents.as_slice(),
+                            [host_kernel::ProviderContent::Item(Valor::Textus(_))]
+                        ),
+                        "{route} must return one text item, got {reply:?}"
+                    );
+                }
             }
         }
         for route in case.excluded_routes {
