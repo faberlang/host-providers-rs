@@ -5,6 +5,7 @@ members = [
     "crates/consolum",
     "crates/aleator",
     "crates/tempus",
+    "crates/provider-contracts",
 ]
 resolver = "2"
 
