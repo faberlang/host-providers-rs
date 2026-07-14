@@ -119,6 +119,7 @@ const PROCESSUS_ROUTES: &[&str] = &[
     "processus:exsequetur",
     "processus:dimitte",
     "processus:lege",
+    "processus:scribe",
     "processus:sedes",
     "processus:muta",
     "processus:identitas",
@@ -236,7 +237,7 @@ fn provider_cases() -> [ProviderCase; 5] {
             register: processus::register,
             provider: processus_provider,
             public_routes: PROCESSUS_ROUTES,
-            excluded_routes: &["processus:exi", "processus:scribe"],
+            excluded_routes: &["processus:exi"],
         },
         ProviderCase {
             name: "solum",
@@ -309,6 +310,10 @@ fn public_fixture(route: &str, workspace: &mut TestWorkspace) -> DispatchFixture
             Valor::Textus("true".to_owned()),
         ])),
         "processus:lege" => DispatchFixture::new(Valor::Textus("PATH".to_owned())),
+        "processus:scribe" => DispatchFixture::new(Valor::Lista(vec![
+            Valor::Textus(format!("FABER_PROVIDER_CONTRACTS_{}", std::process::id())),
+            Valor::Textus("ok".to_owned()),
+        ])),
         "processus:sedes" | "processus:identitas" | "processus:argumenta" => {
             DispatchFixture::new(Valor::Nihil)
         }
@@ -416,10 +421,6 @@ fn excluded_fixture(route: &str) -> DispatchFixture {
     match route {
         "consolum:fundet" => DispatchFixture::new(Valor::Octeti(Vec::new())),
         "processus:exi" => DispatchFixture::new(Valor::Numerus(0)),
-        "processus:scribe" => DispatchFixture::new(Valor::Lista(vec![
-            Valor::Textus("FABER_PROVIDER_CONTRACTS_WRITE".to_owned()),
-            Valor::Textus("ok".to_owned()),
-        ])),
         "solum:fundet" => DispatchFixture::new(Valor::Lista(vec![
             Valor::Textus("ignored".to_owned()),
             Valor::Octeti(Vec::new()),
@@ -631,5 +632,6 @@ fn composed_kernel_registers_unique_provider_identities_and_routes() {
         }
     }
 
-    assert_eq!(admitted_routes.len(), 79);
+    assert_eq!(admitted_routes.len(), 80);
+    std::env::remove_var(format!("FABER_PROVIDER_CONTRACTS_{}", std::process::id()));
 }
