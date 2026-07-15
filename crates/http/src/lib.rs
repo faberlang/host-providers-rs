@@ -153,7 +153,7 @@ impl Http {
             }
             match listener.listener.accept() {
                 Ok((stream, _peer)) => {
-                    let parts = read_request(
+                    let (parts, stream) = read_request(
                         stream,
                         listener.max_body_bytes,
                         &listener.stopped,
@@ -166,10 +166,10 @@ impl Http {
                     }
                     let request = request_carrier(&parts);
                     pending.insert(
-                        parts.parts.id.clone(),
+                        parts.id.clone(),
                         PendingRequest {
                             listener: handle,
-                            stream: parts.stream,
+                            stream,
                         },
                     );
                     return Ok(ProviderReply::item(request));
@@ -217,7 +217,7 @@ impl Http {
             .map_err(|error| {
                 HostError::internal(format!("http:respond timeout setup failed: {error}"))
             })?;
-        let response = format_response(status, &request_id, &headers, &body)?;
+        let response = format_response(status, &request_id, &headers, &body);
         let write_result = request.stream.write_all(&response);
         let _ = request.stream.shutdown(Shutdown::Both);
         write_result
@@ -268,19 +268,6 @@ impl RequestParts {
             body,
         }
     }
-
-    // The stream is attached after parsing so malformed/cancelled requests are never pending.
-    fn with_stream(self, stream: TcpStream) -> PendingParts {
-        PendingParts {
-            parts: self,
-            stream,
-        }
-    }
-}
-
-struct PendingParts {
-    parts: RequestParts,
-    stream: TcpStream,
 }
 
 fn read_request(
@@ -289,7 +276,7 @@ fn read_request(
     stopped: &AtomicBool,
     context: &DispatchContext,
     next_request: &AtomicU64,
-) -> HostResult<PendingParts> {
+) -> HostResult<(RequestParts, TcpStream)> {
     stream
         .set_nonblocking(true)
         .map_err(|error| HostError::internal(format!("http:accept setup failed: {error}")))?;
@@ -363,7 +350,7 @@ fn read_request(
         "{REQUEST_ID_PREFIX}{}",
         next_request.fetch_add(1, Ordering::SeqCst)
     );
-    Ok(RequestParts::new(id, method, path, headers, body).with_stream(stream))
+    Ok((RequestParts::new(id, method, path, headers, body), stream))
 }
 
 fn check_read_state(stopped: &AtomicBool, context: &DispatchContext) -> HostResult<()> {
@@ -435,16 +422,13 @@ fn parse_headers(bytes: &[u8]) -> HostResult<ParsedHeaders> {
     })
 }
 
-fn request_carrier(parts: &PendingParts) -> Valor {
+fn request_carrier(parts: &RequestParts) -> Valor {
     let mut fields = BTreeMap::new();
-    fields.insert("id".to_owned(), Valor::Textus(parts.parts.id.clone()));
-    fields.insert(
-        "method".to_owned(),
-        Valor::Textus(parts.parts.method.clone()),
-    );
-    fields.insert("path".to_owned(), Valor::Textus(parts.parts.path.clone()));
-    fields.insert("headers".to_owned(), headers_value(&parts.parts.headers));
-    fields.insert("body".to_owned(), Valor::Octeti(parts.parts.body.clone()));
+    fields.insert("id".to_owned(), Valor::Textus(parts.id.clone()));
+    fields.insert("method".to_owned(), Valor::Textus(parts.method.clone()));
+    fields.insert("path".to_owned(), Valor::Textus(parts.path.clone()));
+    fields.insert("headers".to_owned(), headers_value(&parts.headers));
+    fields.insert("body".to_owned(), Valor::Octeti(parts.body.clone()));
     Valor::Tabula(fields)
 }
 
@@ -497,7 +481,7 @@ fn format_response(
     request_id: &str,
     headers: &[(String, String)],
     body: &[u8],
-) -> HostResult<Vec<u8>> {
+) -> Vec<u8> {
     let mut response = format!(
         "HTTP/1.1 {status} {}\r\nconnection: close\r\nx-faber-request-id: {request_id}\r\ncontent-length: {}\r\n",
         reason_phrase(status),
@@ -512,7 +496,7 @@ fn format_response(
     }
     response.extend_from_slice(b"\r\n");
     response.extend_from_slice(body);
-    Ok(response)
+    response
 }
 
 fn reason_phrase(status: u16) -> &'static str {
