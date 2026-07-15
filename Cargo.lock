@@ -46,6 +46,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "http"
+version = "0.1.0"
+dependencies = [
+ "faber-runtime",
+ "host-kernel",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
