@@ -267,3 +267,91 @@ fn stop_unblocks_pending_accept() {
         .expect_err("stopped accept");
     assert_eq!(error.code, "E_INVALID_ARGS");
 }
+
+#[test]
+fn http11_without_host_is_rejected() {
+    let provider = Arc::new(Http::new().expect("provider"));
+    let port = free_port();
+    let handle = listen(&provider, i64::from(port));
+    let accept_provider = Arc::clone(&provider);
+    let accepted = thread::spawn(move || {
+        accept_provider.dispatch(&request("http:accept", Valor::Numerus(handle)), &context())
+    });
+    thread::sleep(Duration::from_millis(10));
+    let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect no-host request");
+    client
+        .write_all(b"GET / HTTP/1.1\r\n\r\n")
+        .expect("write no-host request");
+    let result = accepted.join().expect("accept thread");
+    provider
+        .dispatch(&request("http:stop", Valor::Numerus(handle)), &context())
+        .expect("stop no-host listener");
+    let error = result.expect_err("HTTP/1.1 without Host must be rejected");
+    assert_eq!(error.code, "E_INVALID_ARGS");
+}
+
+#[test]
+fn request_header_control_bytes_are_rejected() {
+    let provider = Arc::new(Http::new().expect("provider"));
+    let port = free_port();
+    let handle = listen(&provider, i64::from(port));
+    let accept_provider = Arc::clone(&provider);
+    let accepted = thread::spawn(move || {
+        accept_provider.dispatch(&request("http:accept", Valor::Numerus(handle)), &context())
+    });
+    thread::sleep(Duration::from_millis(10));
+    let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect control-byte request");
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Test: valid\x01invalid\r\n\r\n")
+        .expect("write control-byte request");
+    let result = accepted.join().expect("accept thread");
+    provider
+        .dispatch(&request("http:stop", Valor::Numerus(handle)), &context())
+        .expect("stop control-byte listener");
+    let error = result.expect_err("request header control byte must be rejected");
+    assert_eq!(error.code, "E_INVALID_ARGS");
+}
+
+#[test]
+fn response_header_control_bytes_are_rejected() {
+    let provider = Arc::new(Http::new().expect("provider"));
+    let port = free_port();
+    let handle = listen(&provider, i64::from(port));
+    let accept_provider = Arc::clone(&provider);
+    let accepted = thread::spawn(move || {
+        accept_provider.dispatch(&request("http:accept", Valor::Numerus(handle)), &context())
+    });
+    thread::sleep(Duration::from_millis(10));
+    let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect response request");
+    client
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .expect("write response request");
+    let reply = accepted
+        .join()
+        .expect("accept thread")
+        .expect("valid request");
+    let [ProviderContent::Item(Valor::Tabula(fields))] = reply.contents.as_slice() else {
+        panic!("http:accept must return one request table");
+    };
+    let request_id = match fields.get("id") {
+        Some(Valor::Textus(value)) => value.clone(),
+        other => panic!("missing request id: {other:?}"),
+    };
+    let result = provider.dispatch(
+        &request(
+            "http:respond",
+            Valor::Lista(vec![
+                Valor::Textus(request_id),
+                Valor::Numerus(200),
+                headers(&[("x-test", "valid\u{1}invalid")]),
+                Valor::Textus("body".into()),
+            ]),
+        ),
+        &context(),
+    );
+    provider
+        .dispatch(&request("http:stop", Valor::Numerus(handle)), &context())
+        .expect("stop response listener");
+    let error = result.expect_err("response header control byte must be rejected");
+    assert_eq!(error.code, "E_INVALID_ARGS");
+}
