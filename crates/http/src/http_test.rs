@@ -3,6 +3,7 @@ use host_kernel::{CancellationProbe, ProviderContent};
 use std::collections::BTreeMap;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -55,6 +56,38 @@ fn headers(entries: &[(&str, &str)]) -> Valor {
             })
             .collect(),
     )
+}
+
+fn accept_bounded(provider: Arc<Http>, handle: i64) -> HostResult<ProviderReply> {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let accept_provider = Arc::clone(&provider);
+    let cancellation = Arc::clone(&cancelled);
+    let (result_tx, result_rx) = mpsc::channel();
+    let accepted = thread::spawn(move || {
+        let result = accept_provider.dispatch(
+            &request("http:accept", Valor::Numerus(handle)),
+            &DispatchContext {
+                cancellation: CancellationProbe::from_flag(cancellation),
+            },
+        );
+        result_tx.send(result).expect("send accept result");
+    });
+    let result = match result_rx.recv_timeout(Duration::from_secs(1)) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            cancelled.store(true, Ordering::SeqCst);
+            result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("cancelled accept must finish")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            cancelled.store(true, Ordering::SeqCst);
+            accepted.join().expect("accept thread");
+            panic!("accept thread disconnected before returning");
+        }
+    };
+    accepted.join().expect("accept thread");
+    result
 }
 
 #[test]
@@ -273,16 +306,11 @@ fn http11_without_host_is_rejected() {
     let provider = Arc::new(Http::new().expect("provider"));
     let port = free_port();
     let handle = listen(&provider, i64::from(port));
-    let accept_provider = Arc::clone(&provider);
-    let accepted = thread::spawn(move || {
-        accept_provider.dispatch(&request("http:accept", Valor::Numerus(handle)), &context())
-    });
-    thread::sleep(Duration::from_millis(10));
     let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect no-host request");
     client
         .write_all(b"GET / HTTP/1.1\r\n\r\n")
         .expect("write no-host request");
-    let result = accepted.join().expect("accept thread");
+    let result = accept_bounded(Arc::clone(&provider), handle);
     provider
         .dispatch(&request("http:stop", Valor::Numerus(handle)), &context())
         .expect("stop no-host listener");
@@ -295,16 +323,11 @@ fn request_header_control_bytes_are_rejected() {
     let provider = Arc::new(Http::new().expect("provider"));
     let port = free_port();
     let handle = listen(&provider, i64::from(port));
-    let accept_provider = Arc::clone(&provider);
-    let accepted = thread::spawn(move || {
-        accept_provider.dispatch(&request("http:accept", Valor::Numerus(handle)), &context())
-    });
-    thread::sleep(Duration::from_millis(10));
     let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect control-byte request");
     client
         .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Test: valid\x01invalid\r\n\r\n")
         .expect("write control-byte request");
-    let result = accepted.join().expect("accept thread");
+    let result = accept_bounded(Arc::clone(&provider), handle);
     provider
         .dispatch(&request("http:stop", Valor::Numerus(handle)), &context())
         .expect("stop control-byte listener");
@@ -317,19 +340,11 @@ fn response_header_control_bytes_are_rejected() {
     let provider = Arc::new(Http::new().expect("provider"));
     let port = free_port();
     let handle = listen(&provider, i64::from(port));
-    let accept_provider = Arc::clone(&provider);
-    let accepted = thread::spawn(move || {
-        accept_provider.dispatch(&request("http:accept", Valor::Numerus(handle)), &context())
-    });
-    thread::sleep(Duration::from_millis(10));
     let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect response request");
     client
         .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .expect("write response request");
-    let reply = accepted
-        .join()
-        .expect("accept thread")
-        .expect("valid request");
+    let reply = accept_bounded(Arc::clone(&provider), handle).expect("valid request");
     let [ProviderContent::Item(Valor::Tabula(fields))] = reply.contents.as_slice() else {
         panic!("http:accept must return one request table");
     };
