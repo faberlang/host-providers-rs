@@ -384,6 +384,7 @@ fn parse_headers(bytes: &[u8]) -> HostResult<ParsedHeaders> {
     }
     let mut headers = Vec::new();
     let mut content_length = None;
+    let mut has_host = false;
     for line in lines {
         if line.is_empty() {
             break;
@@ -393,9 +394,11 @@ fn parse_headers(bytes: &[u8]) -> HostResult<ParsedHeaders> {
             .ok_or_else(|| HostError::invalid_args("http:accept header is malformed"))?;
         let name = name.trim();
         let value = value.trim();
-        if name.is_empty() || !name.bytes().all(is_token_byte) || value.contains(['\r', '\n', '\0'])
-        {
+        if name.is_empty() || !name.bytes().all(is_token_byte) || !is_valid_header_value(value) {
             return Err(HostError::invalid_args("http:accept header is malformed"));
+        }
+        if name.eq_ignore_ascii_case("host") {
+            has_host = true;
         }
         if name.eq_ignore_ascii_case("transfer-encoding") {
             return Err(HostError::invalid_args(
@@ -413,6 +416,11 @@ fn parse_headers(bytes: &[u8]) -> HostResult<ParsedHeaders> {
             }
         }
         headers.push((name.to_owned(), value.to_owned()));
+    }
+    if !has_host {
+        return Err(HostError::invalid_args(
+            "http:accept HTTP/1.1 request requires a Host header",
+        ));
     }
     Ok(ParsedHeaders {
         method: method.to_owned(),
@@ -463,7 +471,7 @@ fn header_value(value: &Valor) -> HostResult<(String, String)> {
     };
     let name = text_field(fields, "name")?;
     let value = text_field(fields, "value")?;
-    if name.is_empty() || !name.bytes().all(is_token_byte) || value.contains(['\r', '\n', '\0']) {
+    if name.is_empty() || !name.bytes().all(is_token_byte) || !is_valid_header_value(&value) {
         return Err(HostError::invalid_args(
             "HTTP header name or value is malformed",
         ));
@@ -580,6 +588,12 @@ fn bounded_body_size(value: i64) -> HostResult<usize> {
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn is_valid_header_value(value: &str) -> bool {
+    !value
+        .bytes()
+        .any(|byte| (byte < 0x20 && byte != b'\t') || byte == 0x7f)
 }
 
 fn is_token_byte(byte: u8) -> bool {
