@@ -8,3 +8,6 @@ publish = false
 [dependencies]
 faber.workspace = true
 host-kernel.workspace = true
+
+[lints]
+workspace = true

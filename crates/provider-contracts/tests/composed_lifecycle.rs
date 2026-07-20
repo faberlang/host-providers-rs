@@ -281,6 +281,9 @@ fn request(
     )
 }
 
+// Fixture table intentionally repeats Valor openers across routes and is long
+// by route-coverage design; keep map readable over clippy style limits.
+#[allow(clippy::too_many_lines, clippy::match_same_arms)]
 fn public_fixture(route: &str, workspace: &mut TestWorkspace) -> DispatchFixture {
     match route {
         "aleator:fractum" | "aleator:uuid" => DispatchFixture::new(Valor::Nihil),
@@ -420,13 +423,12 @@ fn public_fixture(route: &str, workspace: &mut TestWorkspace) -> DispatchFixture
 fn excluded_fixture(route: &str) -> DispatchFixture {
     match route {
         "consolum:fundet" => DispatchFixture::new(Valor::Octeti(Vec::new())),
-        "processus:exi" => DispatchFixture::new(Valor::Numerus(0)),
+        "processus:exi" | "tempus:expectet" => DispatchFixture::new(Valor::Numerus(0)),
         "solum:fundet" => DispatchFixture::new(Valor::Lista(vec![
             Valor::Textus("ignored".to_owned()),
             Valor::Octeti(Vec::new()),
         ])),
         "solum:leget" => DispatchFixture::cancelled(Valor::Textus("ignored".to_owned())),
-        "tempus:expectet" => DispatchFixture::new(Valor::Numerus(0)),
         other => panic!("missing excluded dispatch fixture for {other}"),
     }
 }
@@ -507,6 +509,7 @@ fn solum_read_routes_match_manifest_contracts_through_kernel_dispatch() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn composed_kernel_registers_unique_provider_identities_and_routes() {
     let cases = provider_cases();
     let mut kernel = Kernel::new();

@@ -19,3 +19,6 @@ version = "0.1.0"
 faber = { package = "faber-runtime", path = "../faber-runtime" }
 host-kernel = { path = "../host-kernel-rs" }
 libc = "0.2"
+
+[workspace.lints.clippy]
+pedantic = "deny"

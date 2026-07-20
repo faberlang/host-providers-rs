@@ -13,3 +13,6 @@ host-kernel.workspace = true
 processus = { path = "../processus" }
 solum = { path = "../solum" }
 tempus = { path = "../tempus" }
+
+[lints]
+workspace = true
