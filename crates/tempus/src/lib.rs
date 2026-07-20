@@ -13,6 +13,11 @@ pub struct Tempus {
 }
 
 impl Tempus {
+    /// Create a new [`Tempus`] provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostError`] if the embedded manifest JSON cannot be parsed.
     pub fn new() -> HostResult<Self> {
         Ok(Self {
             registration: ProviderRegistration::new(host_kernel::parse_manifest(manifest_json())?),
@@ -20,6 +25,12 @@ impl Tempus {
     }
 }
 
+/// Register the [`Tempus`] provider with the kernel.
+///
+/// # Errors
+///
+/// Returns [`HostError`] if the provider cannot be created
+/// (manifest parsing failure) or if registration fails.
 pub fn register(kernel: &mut Kernel) -> HostResult<()> {
     kernel.register(Arc::new(Tempus::new()?))
 }

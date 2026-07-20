@@ -17,6 +17,11 @@ pub struct Processus {
 }
 
 impl Processus {
+    /// Create a new [`Processus`] provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostError`] if the embedded manifest JSON cannot be parsed.
     pub fn new() -> HostResult<Self> {
         Ok(Self {
             registration: ProviderRegistration::new(host_kernel::parse_manifest(manifest_json())?),
@@ -24,6 +29,12 @@ impl Processus {
     }
 }
 
+/// Register the [`Processus`] provider with the kernel.
+///
+/// # Errors
+///
+/// Returns [`HostError`] if the provider cannot be created
+/// (manifest parsing failure) or if registration fails.
 pub fn register(kernel: &mut Kernel) -> HostResult<()> {
     kernel.register(Arc::new(Processus::new()?))
 }
