@@ -94,15 +94,24 @@ fn rng() -> MutexGuard<'static, Prng> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn random_fraction() -> f64 {
     let bits = rng().next_u64() >> 11;
     (bits as f64) / ((1_u64 << 53) as f64)
 }
 
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation
+)]
 fn sort_integer(opener: &Valor) -> HostResult<ProviderReply> {
     let min = i64_arg(opener, 0, "min")?;
     let max = i64_arg(opener, 1, "max")?;
     let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+    // SAFETY: `span = hi - lo + 1` with `hi >= lo` so the result is non-negative
+    // and fits `u128`. `offset < span` crosses u128 → i128, then `lo + offset`
+    // is bounded by [lo, hi], which fits `i64` by construction.
     let span = (i128::from(hi) - i128::from(lo) + 1) as u128;
     let offset = (u128::from(rng().next_u64()) % span) as i128;
     Ok(ProviderReply::item(Valor::Numerus(
@@ -150,10 +159,14 @@ fn uuid_route() -> HostResult<ProviderReply> {
 
 fn seed(opener: &Valor) -> HostResult<ProviderReply> {
     let n = i64_arg(opener, 0, "n")?;
-    rng().state = if n > 0 { n as u64 } else { default_seed() };
+    // SAFETY: `n > 0` guards the cast; negative values use `default_seed()`.
+    #[allow(clippy::cast_sign_loss)]
+    let state = if n > 0 { n as u64 } else { default_seed() };
+    rng().state = state;
     Ok(ProviderReply::vacuum())
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn default_seed() -> u64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -267,6 +280,8 @@ mod tests {
             matches!(negative.contents.as_slice(), [ProviderContent::Byte(value)] if value.is_empty())
         );
 
+        // SAFETY: `MAX_RANDOM_BYTES` (1 MiB) fits easily in `i64`.
+        #[allow(clippy::cast_possible_wrap)]
         let error = provider
             .dispatch(
                 &RequestFrame {

@@ -266,6 +266,9 @@ fn configure_process_group(command: &mut Command) {
 fn terminate_process_group(child: &mut Child) -> HostResult<bool> {
     #[cfg(unix)]
     {
+        // SAFETY: `child.id()` returns `u32` which fits in `libc::pid_t` (`i32`);
+        // the negation produces a valid negative process group ID.
+        #[allow(clippy::cast_possible_wrap)]
         let group = -(child.id() as libc::pid_t);
         let signal_result = unsafe { libc::kill(group, libc::SIGKILL) };
         if signal_result == 0 {

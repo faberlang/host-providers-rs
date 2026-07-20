@@ -69,6 +69,7 @@ fn byte_and_string_arguments_decode_from_ordered_openers() {
 }
 
 #[test]
+#[allow(clippy::cast_possible_wrap)]
 fn hauri_rejects_over_limit_before_allocation_and_keeps_zero_policy() {
     let provider = Consolum::new().expect("provider");
 

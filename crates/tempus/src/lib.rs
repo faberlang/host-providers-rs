@@ -77,6 +77,8 @@ fn sleep(opener: &Valor, context: &DispatchContext) -> HostResult<ProviderReply>
         return Err(HostError::invalid_args("ms must be non-negative"));
     }
     if ms > 0 {
+        // SAFETY: `ms >= 0` was checked above.
+        #[allow(clippy::cast_sign_loss)]
         let deadline = Instant::now() + Duration::from_millis(ms as u64);
         while Instant::now() < deadline {
             if context.cancellation.is_cancelled() {

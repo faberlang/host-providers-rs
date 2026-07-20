@@ -355,8 +355,11 @@ fn write_fd_nonblocking(
         // SAFETY: `remaining` is a live slice for the duration of this call,
         // and `fd` remains owned by the caller.
         let written = unsafe { libc::write(fd, remaining.as_ptr().cast(), remaining.len()) };
+        // SAFETY: `libc::write` returns the positive byte count when `written > 0`.
         if written > 0 {
-            offset += written as usize;
+            #[allow(clippy::cast_sign_loss)]
+            let written = written as usize;
+            offset += written;
             continue;
         }
         if written == 0 {
@@ -419,7 +422,13 @@ fn bytes_arg(value: &Valor, index: usize, name: &str) -> HostResult<Vec<u8>> {
         Valor::Lista(items) => items
             .iter()
             .map(|item| match item {
-                Valor::Numerus(byte) if (0..=i64::from(u8::MAX)).contains(byte) => Ok(*byte as u8),
+                Valor::Numerus(byte) if (0..=i64::from(u8::MAX)).contains(byte) => {
+                    // SAFETY: range check `0..=i64::from(u8::MAX)` guarantees
+                    // the value fits `u8`.
+                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                    let byte = *byte as u8;
+                    Ok(byte)
+                }
                 _ => Err(HostError::invalid_args(format!(
                     "{name} must contain bytes"
                 ))),

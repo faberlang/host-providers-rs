@@ -169,9 +169,13 @@ fn find_text_range(opener: &Valor) -> HostResult<ProviderReply> {
             .windows(needle.len())
             .position(|window| window == needle)
             .map_or(-1, |position| {
+                // SAFETY: `position` is bounded by `MAX_RANGE_READ_BYTES`,
+                // which fits in `i64`.
+                #[allow(clippy::cast_possible_wrap)]
+                let position = position as i64;
                 i64::try_from(start)
                     .unwrap_or(i64::MAX)
-                    .saturating_add(position as i64)
+                    .saturating_add(position)
             })
     };
     Ok(ProviderReply::item(Valor::Numerus(offset)))
@@ -250,7 +254,11 @@ fn file_size(opener: &Valor) -> HostResult<ProviderReply> {
     let size = fs::metadata(path)
         .map_err(|error| HostError::internal(format!("solum:mensura failed: {error}")))?
         .len();
-    Ok(ProviderReply::item(Valor::Numerus(size as i64)))
+    // SAFETY: file sizes returned by the OS fit `i64` for practical files;
+    // Valor::Numerus uses `i64`.
+    #[allow(clippy::cast_possible_wrap)]
+    let size = size as i64;
+    Ok(ProviderReply::item(Valor::Numerus(size)))
 }
 
 fn file_mode(opener: &Valor) -> HostResult<ProviderReply> {
@@ -270,7 +278,10 @@ fn set_file_mode(opener: &Valor) -> HostResult<ProviderReply> {
             "modus must be between 0 and 0o7777",
         ));
     }
-    fs::set_permissions(&path, fs::Permissions::from_mode(mode as u32))
+    // SAFETY: `mode` was checked to be in `0..=0o7777`, which fits `u32`.
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let permissions = fs::Permissions::from_mode(mode as u32);
+    fs::set_permissions(&path, permissions)
         .map_err(|error| HostError::internal(format!("solum:modum failed: {error}")))?;
     Ok(ProviderReply::vacuum())
 }
@@ -515,7 +526,13 @@ fn bytes_arg(value: &Valor, index: usize, name: &str) -> HostResult<Vec<u8>> {
         Valor::Lista(items) => items
             .iter()
             .map(|item| match item {
-                Valor::Numerus(byte) if (0..=i64::from(u8::MAX)).contains(byte) => Ok(*byte as u8),
+                Valor::Numerus(byte) if (0..=i64::from(u8::MAX)).contains(byte) => {
+                    // SAFETY: range check `0..=i64::from(u8::MAX)` guarantees
+                    // the value fits `u8`.
+                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                    let byte = *byte as u8;
+                    Ok(byte)
+                }
                 _ => Err(HostError::invalid_args(format!(
                     "{name} must contain bytes"
                 ))),
@@ -656,6 +673,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_wrap)]
     fn partem_and_inveni_reject_over_limit_ranges_before_allocation() {
         let provider = Solum::new().expect("provider");
         let path =
