@@ -79,6 +79,7 @@ pub fn register(kernel: &mut Kernel) -> HostResult<()> {
     kernel.register(Arc::new(Http::new()?))
 }
 
+#[must_use]
 pub fn manifest_json() -> &'static str {
     include_str!("manifest.json")
 }

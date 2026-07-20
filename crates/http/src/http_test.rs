@@ -1,6 +1,7 @@
 use super::*;
 use host_kernel::{CancellationProbe, ProviderContent};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -58,9 +59,9 @@ fn headers(entries: &[(&str, &str)]) -> Valor {
     )
 }
 
-fn accept_bounded(provider: Arc<Http>, handle: i64) -> HostResult<ProviderReply> {
+fn accept_bounded(provider: &Arc<Http>, handle: i64) -> HostResult<ProviderReply> {
     let cancelled = Arc::new(AtomicBool::new(false));
-    let accept_provider = Arc::clone(&provider);
+    let accept_provider = Arc::clone(provider);
     let cancellation = Arc::clone(&cancelled);
     let (result_tx, result_rx) = mpsc::channel();
     let accepted = thread::spawn(move || {
@@ -179,7 +180,6 @@ fn localhost_request_accepts_and_responds_once() {
     client
         .set_read_timeout(Some(Duration::from_secs(1)))
         .expect("read timeout");
-    use std::io::Read;
     client.read_to_string(&mut response).expect("read response");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(response.contains("x-faber-request-id: http-"));
@@ -310,7 +310,7 @@ fn http11_without_host_is_rejected() {
     client
         .write_all(b"GET / HTTP/1.1\r\n\r\n")
         .expect("write no-host request");
-    let result = accept_bounded(Arc::clone(&provider), handle);
+    let result = accept_bounded(&provider, handle);
     provider
         .dispatch(&request("http:stop", Valor::Numerus(handle)), &context())
         .expect("stop no-host listener");
@@ -327,7 +327,7 @@ fn request_header_control_bytes_are_rejected() {
     client
         .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Test: valid\x01invalid\r\n\r\n")
         .expect("write control-byte request");
-    let result = accept_bounded(Arc::clone(&provider), handle);
+    let result = accept_bounded(&provider, handle);
     provider
         .dispatch(&request("http:stop", Valor::Numerus(handle)), &context())
         .expect("stop control-byte listener");
@@ -344,7 +344,7 @@ fn response_header_control_bytes_are_rejected() {
     client
         .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .expect("write response request");
-    let reply = accept_bounded(Arc::clone(&provider), handle).expect("valid request");
+    let reply = accept_bounded(&provider, handle).expect("valid request");
     let [ProviderContent::Item(Valor::Tabula(fields))] = reply.contents.as_slice() else {
         panic!("http:accept must return one request table");
     };

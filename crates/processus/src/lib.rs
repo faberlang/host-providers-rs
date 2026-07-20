@@ -28,6 +28,7 @@ pub fn register(kernel: &mut Kernel) -> HostResult<()> {
     kernel.register(Arc::new(Processus::new()?))
 }
 
+#[must_use]
 pub fn manifest_json() -> &'static str {
     include_str!("manifest.json")
 }
@@ -49,9 +50,9 @@ impl Provider for Processus {
             "processus:scribe" => write_env(&request.opener),
             "processus:sedes" => current_dir(),
             "processus:muta" => set_current_dir(&request.opener),
-            "processus:identitas" => Ok(ProviderReply::item(Valor::Numerus(
-                std::process::id() as i64
-            ))),
+            "processus:identitas" => Ok(ProviderReply::item(Valor::Numerus(i64::from(
+                std::process::id(),
+            )))),
             "processus:argumenta" => Ok(ProviderReply::list(
                 std::env::args().skip(1).map(Valor::Textus),
             )),
@@ -118,14 +119,14 @@ fn run_command(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| HostError::internal(format!("{operation} failed: {error}")))?;
-    let stdout = match child.stdout.take() {
-        Some(pipe) => pipe,
-        None => return Err(pipe_unavailable(&mut child, operation, "stdout")),
+    let Some(pipe) = child.stdout.take() else {
+        return Err(pipe_unavailable(&mut child, operation, "stdout"));
     };
-    let stderr = match child.stderr.take() {
-        Some(pipe) => pipe,
-        None => return Err(pipe_unavailable(&mut child, operation, "stderr")),
+    let stdout = pipe;
+    let Some(pipe) = child.stderr.take() else {
+        return Err(pipe_unavailable(&mut child, operation, "stderr"));
     };
+    let stderr = pipe;
     let stdout_reader = thread::spawn(move || read_pipe(stdout));
     let stderr_reader = thread::spawn(move || read_pipe(stderr));
 
@@ -214,7 +215,9 @@ fn abort_command(
 
 fn terminate_child(child: &mut Child) -> HostResult<()> {
     let group_termination = terminate_process_group(child);
-    let direct_termination = if !matches!(&group_termination, Ok(true)) {
+    let direct_termination = if matches!(&group_termination, Ok(true)) {
+        Ok(())
+    } else {
         match child.kill() {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -224,8 +227,6 @@ fn terminate_child(child: &mut Child) -> HostResult<()> {
                 )));
             }
         }
-        Ok(())
-    } else {
         Ok(())
     };
     let reap = child
@@ -294,7 +295,7 @@ fn spawn_detached(opener: &Valor) -> HostResult<ProviderReply> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| HostError::internal(format!("processus:dimitte failed: {error}")))?;
-    Ok(ProviderReply::item(Valor::Numerus(child.id() as i64)))
+    Ok(ProviderReply::item(Valor::Numerus(i64::from(child.id()))))
 }
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());

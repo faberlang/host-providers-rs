@@ -30,6 +30,7 @@ pub fn register(kernel: &mut Kernel) -> HostResult<()> {
     kernel.register(Arc::new(Solum::new()?))
 }
 
+#[must_use]
 pub fn manifest_json() -> &'static str {
     include_str!("manifest.json")
 }
@@ -156,12 +157,11 @@ fn find_text_range(opener: &Valor) -> HostResult<ProviderReply> {
         bytes
             .windows(needle.len())
             .position(|window| window == needle)
-            .map(|position| {
+            .map_or(-1, |position| {
                 i64::try_from(start)
                     .unwrap_or(i64::MAX)
                     .saturating_add(position as i64)
             })
-            .unwrap_or(-1)
     };
     Ok(ProviderReply::item(Valor::Numerus(offset)))
 }
@@ -209,18 +209,14 @@ fn exists(opener: &Valor) -> HostResult<ProviderReply> {
 fn is_dir(opener: &Valor) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
     Ok(ProviderReply::item(Valor::Bivalens(
-        fs::metadata(path)
-            .map(|metadata| metadata.is_dir())
-            .unwrap_or(false),
+        fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()),
     )))
 }
 
 fn is_file(opener: &Valor) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
     Ok(ProviderReply::item(Valor::Bivalens(
-        fs::metadata(path)
-            .map(|metadata| metadata.is_file())
-            .unwrap_or(false),
+        fs::metadata(path).is_ok_and(|metadata| metadata.is_file()),
     )))
 }
 
@@ -234,9 +230,7 @@ fn is_readable(opener: &Valor) -> HostResult<ProviderReply> {
 fn is_symlink(opener: &Valor) -> HostResult<ProviderReply> {
     let path = string_arg(opener, 0, "via")?;
     Ok(ProviderReply::item(Valor::Bivalens(
-        fs::symlink_metadata(path)
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false),
+        fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()),
     )))
 }
 
@@ -510,7 +504,7 @@ fn bytes_arg(value: &Valor, index: usize, name: &str) -> HostResult<Vec<u8>> {
         Valor::Lista(items) => items
             .iter()
             .map(|item| match item {
-                Valor::Numerus(byte) if (0..=u8::MAX as i64).contains(byte) => Ok(*byte as u8),
+                Valor::Numerus(byte) if (0..=i64::from(u8::MAX)).contains(byte) => Ok(*byte as u8),
                 _ => Err(HostError::invalid_args(format!(
                     "{name} must contain bytes"
                 ))),

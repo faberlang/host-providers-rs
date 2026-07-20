@@ -24,6 +24,7 @@ pub fn register(kernel: &mut Kernel) -> HostResult<()> {
     kernel.register(Arc::new(Tempus::new()?))
 }
 
+#[must_use]
 pub fn manifest_json() -> &'static str {
     include_str!("manifest.json")
 }

@@ -41,6 +41,7 @@ pub fn register(kernel: &mut Kernel) -> HostResult<()> {
     kernel.register(Arc::new(Consolum::new()?))
 }
 
+#[must_use]
 pub fn manifest_json() -> &'static str {
     include_str!("manifest.json")
 }
@@ -236,7 +237,7 @@ fn wait_for_fd(
         };
         // SAFETY: `descriptor` is a valid one-element pollfd array for the
         // borrowed file descriptor, and libc writes only within that array.
-        let result = unsafe { libc::poll(&mut descriptor, 1, IO_POLL_TIMEOUT_MS) };
+        let result = unsafe { libc::poll(&raw mut descriptor, 1, IO_POLL_TIMEOUT_MS) };
         if result > 0 {
             let error_events = libc::POLLNVAL as libc::c_short;
             if descriptor.revents & error_events != 0 {
@@ -407,7 +408,7 @@ fn bytes_arg(value: &Valor, index: usize, name: &str) -> HostResult<Vec<u8>> {
         Valor::Lista(items) => items
             .iter()
             .map(|item| match item {
-                Valor::Numerus(byte) if (0..=u8::MAX as i64).contains(byte) => Ok(*byte as u8),
+                Valor::Numerus(byte) if (0..=i64::from(u8::MAX)).contains(byte) => Ok(*byte as u8),
                 _ => Err(HostError::invalid_args(format!(
                     "{name} must contain bytes"
                 ))),

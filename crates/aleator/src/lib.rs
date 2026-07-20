@@ -29,6 +29,7 @@ pub fn register(kernel: &mut Kernel) -> HostResult<()> {
     kernel.register(Arc::new(Aleator::new()?))
 }
 
+#[must_use]
 pub fn manifest_json() -> &'static str {
     include_str!("manifest.json")
 }
@@ -78,7 +79,8 @@ impl Prng {
 static RNG: Mutex<Prng> = Mutex::new(Prng { state: 0 });
 
 fn rng() -> MutexGuard<'static, Prng> {
-    RNG.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    RNG.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn random_fraction() -> f64 {
@@ -90,10 +92,10 @@ fn sort_integer(opener: &Valor) -> HostResult<ProviderReply> {
     let min = i64_arg(opener, 0, "min")?;
     let max = i64_arg(opener, 1, "max")?;
     let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
-    let span = (hi as i128 - lo as i128 + 1) as u128;
+    let span = (i128::from(hi) - i128::from(lo) + 1) as u128;
     let offset = (u128::from(rng().next_u64()) % span) as i128;
     Ok(ProviderReply::item(Valor::Numerus(
-        (lo as i128 + offset) as i64,
+        (i128::from(lo) + offset) as i64,
     )))
 }
 
