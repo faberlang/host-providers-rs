@@ -1,11 +1,16 @@
-# host-providers-rs
+# host-providers-rs (relocated)
 
-Public Rust provider workspace for Faber effect families. The five core
-providers are migrated here in Platform P order; each owns its native effects
-and checked capability manifest.
+This repository is **no longer the live source**.
 
-Factory status:
+Host libraries and products live in the sibling monorepo:
 
-- `docs/factory/provider-manifest-dispatch-coverage.md` records local
-  manifest/dispatch coverage for `aleator`, `consolum`, `processus`, `solum`,
-  and `tempus`, plus unsupported public-claim boundaries.
+```text
+faberlang/hosts/
+  crates/host-kernel
+  crates/host-native
+  crates/{aleator,consolum,http,processus,solum,tempus,…}
+  macos-arm64/
+  webgpu-browser/
+```
+
+See `faberlang/hosts/README.md`.
